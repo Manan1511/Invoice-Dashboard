@@ -1,7 +1,7 @@
 import os
 import uuid
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Optional
 import shutil
@@ -25,6 +25,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Global unhandled exception handler – returns structured JSON instead of a raw 500 HTML page
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "An unexpected server error occurred. Please try again or contact support.",
+            "hint": str(exc)
+        }
+    )
+
 # In-memory session store for mapping state
 SESSIONS: Dict[str, Dict] = {}
 
@@ -32,6 +43,26 @@ UPLOAD_DIR = "uploads"
 OUTPUT_DIR = "workbooks"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Constants for file validation
+_ALLOWED_EXTENSIONS = {".xlsx", ".xls"}
+_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
+
+def _validate_excel_upload(upload: UploadFile, label: str = "file") -> None:
+    """Validates that an uploaded file is an acceptable Excel file within size limits."""
+    ext = os.path.splitext(upload.filename or "")[1].lower()
+    if ext not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid {label}: '{upload.filename}' is not an Excel file. Please upload a .xlsx or .xls file."
+        )
+    # FastAPI UploadFile.size is available after the file is read; check content-length header if present
+    content_length = upload.size
+    if content_length is not None and content_length > _MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"The {label} '{upload.filename}' is too large ({content_length // (1024*1024)} MB). Maximum allowed size is 50 MB."
+        )
 
 @app.get("/api/domain-lists")
 async def get_domain_lists():
@@ -96,29 +127,55 @@ async def upload_files(
     year: int = Form(2026)
 ):
     """Handles uploading monthly TB file and optional prior month workbook."""
+    # 1. Validate uploaded files before doing anything
+    _validate_excel_upload(file, "Trial Balance")
+    if prior_file and prior_file.filename:
+        _validate_excel_upload(prior_file, "Prior Month Workbook")
+
+    # Validate month and year ranges
+    if not (1 <= month <= 12):
+        raise HTTPException(status_code=422, detail="Month must be between 1 and 12.")
+    if not (2000 <= year <= 2100):
+        raise HTTPException(status_code=422, detail="Year must be a valid 4-digit year between 2000 and 2100.")
+
     session_id = str(uuid.uuid4())
     
-    # 1. Save uploaded active monthly file
-    file_ext = os.path.splitext(file.filename)[1]
+    # 2. Save uploaded active monthly file
+    file_ext = os.path.splitext(file.filename)[1].lower()
     temp_file_path = os.path.join(UPLOAD_DIR, f"{session_id}_active{file_ext}")
-    with open(temp_file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    try:
+        with open(temp_file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Could not save the uploaded file: {str(e)}")
         
-    # 2. Save prior month file if provided
+    # 3. Save prior month file if provided
     prior_file_path = None
-    if prior_file:
-        prior_ext = os.path.splitext(prior_file.filename)[1]
+    if prior_file and prior_file.filename:
+        prior_ext = os.path.splitext(prior_file.filename)[1].lower()
         prior_file_path = os.path.join(UPLOAD_DIR, f"{session_id}_prior{prior_ext}")
-        with open(prior_file_path, "wb") as buffer:
-            shutil.copyfileobj(prior_file.file, buffer)
+        try:
+            with open(prior_file_path, "wb") as buffer:
+                shutil.copyfileobj(prior_file.file, buffer)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"Could not save the prior month workbook: {str(e)}")
             
-    # 3. Parse trial balance
+    # 4. Parse trial balance
     try:
         parsed_entries = parse_tally_tb(temp_file_path)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to parse active Trial Balance: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to parse the Trial Balance. Ensure it is a valid Tally Prime Excel export with a 'TB' or 'Trial Balance' sheet. Details: {str(e)}"
+        )
+
+    if not parsed_entries:
+        raise HTTPException(
+            status_code=400,
+            detail="No ledger entries were found in the uploaded Trial Balance. Check that the file has a 'TB' sheet with data rows starting from row 5."
+        )
         
-    # 4. Check for unmapped ledgers
+    # 5. Check for unmapped ledgers
     unmapped_ledgers = get_unmapped_ledgers(parsed_entries)
     
     # Store session details
@@ -138,7 +195,7 @@ async def upload_files(
             "unmapped_ledgers": unmapped_ledgers
         }
         
-    # 5. If NO unmapped ledgers, compile workbook immediately!
+    # 6. If NO unmapped ledgers, compile workbook immediately!
     return await _process_and_finalize_workbook(session_id)
 
 @app.post("/api/map")
@@ -173,41 +230,63 @@ async def _process_and_finalize_workbook(session_id: str):
     
     # 1. Roll-forward YTD balances if necessary
     has_ytd = check_if_tb_has_ytd(entries)
-    if not has_ytd:
-        # Calculate YTD cumulative balances by rolling forward from prior month workbook
-        entries = roll_forward_ytd(entries, prior_path)
-    else:
-        # Tally Prime file has YTD data, ensure we fill opening/closing YTD correctly if blank
-        for entry in entries:
-            if entry.opening_ytd is None:
-                entry.opening_ytd = entry.opening or 0.0
-            if entry.debit_ytd is None:
-                entry.debit_ytd = entry.debit or 0.0
-            if entry.credit_ytd is None:
-                entry.credit_ytd = entry.credit or 0.0
-            if entry.closing_ytd is None:
-                entry.closing_ytd = entry.closing or 0.0
+    try:
+        if not has_ytd:
+            # Calculate YTD cumulative balances by rolling forward from prior month workbook
+            entries = roll_forward_ytd(entries, prior_path)
+        else:
+            # Tally Prime file has YTD data, ensure we fill opening/closing YTD correctly if blank
+            for entry in entries:
+                if entry.opening_ytd is None:
+                    entry.opening_ytd = entry.opening or 0.0
+                if entry.debit_ytd is None:
+                    entry.debit_ytd = entry.debit or 0.0
+                if entry.credit_ytd is None:
+                    entry.credit_ytd = entry.credit or 0.0
+                if entry.closing_ytd is None:
+                    entry.closing_ytd = entry.closing or 0.0
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"YTD roll-forward calculation failed. Ensure the prior month workbook has a valid 'List of Ledgers' sheet. Details: {str(e)}"
+        )
                 
     # 2. Compile output workbook
     output_filename = f"MIS_Report_{year}_{month:02d}.xlsx"
     output_path = os.path.join(OUTPUT_DIR, output_filename)
-    generate_monthly_workbook(entries, active_path, output_path)
+    try:
+        generate_monthly_workbook(entries, active_path, output_path)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=500,
+            detail="MIS template file not found. Please ensure 'templates/MIS_template.xlsx' exists in the server directory."
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Excel workbook generation failed: {str(e)}"
+        )
     
     # Save the output file path in the session for downloading
     session["output_path"] = output_path
     
     # 3. Extract calculated P&L data dynamically
-    # Construct month labels
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     month_label = f"{month_names[month-1]}'{str(year)[-2:]}"
     ytd_label = f"YTD'{str(year)[-2:]}"
     
-    pl_data = extract_pl_dashboard(
-        entries, 
-        month_label, 
-        ytd_label, 
-        has_ytd=(has_ytd or prior_path is not None)
-    )
+    try:
+        pl_data = extract_pl_dashboard(
+            entries, 
+            month_label, 
+            ytd_label, 
+            has_ytd=(has_ytd or prior_path is not None)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Dashboard P&L computation failed. Check that all ledger mappings are correctly classified. Details: {str(e)}"
+        )
     
     return {
         "success": True,

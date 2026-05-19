@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Upload, FileText, ChevronRight, Download, RefreshCw, BarChart2, 
   PieChart, CheckCircle, AlertTriangle, ArrowUpRight, DollarSign, 
-  TrendingUp, Layers, HelpCircle
+  TrendingUp, Layers, HelpCircle, X, WifiOff
 } from 'lucide-react';
 import { 
   ResponsiveContainer, XAxis, YAxis, Tooltip, Legend, AreaChart, Area
@@ -39,6 +39,91 @@ interface DomainLists {
   classifications: string[];
 }
 
+/** Typed error object to differentiate error categories for UX messaging */
+type ErrorCategory = 'network' | 'validation' | 'server' | 'parse';
+interface AppError {
+  category: ErrorCategory;
+  title: string;
+  message: string;
+  hint?: string;
+}
+
+/** Extracts a user-friendly AppError from a fetch Response or thrown Error */
+async function parseApiError(res: Response | null, caught: unknown): Promise<AppError> {
+  if (res === null) {
+    // Network / timeout failure
+    const msg = caught instanceof Error ? caught.message : String(caught);
+    if (msg.includes('NetworkError') || msg.includes('Failed to fetch') || msg.includes('Load failed')) {
+      return {
+        category: 'network',
+        title: 'Cannot Reach Server',
+        message: 'The backend server is not responding. Please make sure the Python server is running on port 8000.',
+        hint: 'Run: cd backend && python main.py'
+      };
+    }
+    if (msg.includes('AbortError') || msg.toLowerCase().includes('timeout')) {
+      return {
+        category: 'network',
+        title: 'Request Timed Out',
+        message: 'The server took too long to respond. The file may be very large — please try again.',
+      };
+    }
+    return {
+      category: 'network',
+      title: 'Connection Error',
+      message: msg || 'An unexpected network error occurred.',
+    };
+  }
+
+  // Try to parse the JSON error body from the server
+  let detail = `Server responded with status ${res.status}.`;
+  let hint: string | undefined;
+  try {
+    const body = await res.json();
+    detail = body.detail || detail;
+    hint = body.hint;
+  } catch {
+    // Non-JSON response (e.g. nginx 502 HTML page)
+    detail = `Server returned an unreadable response (HTTP ${res.status}). The server may be overloaded or crashed.`;
+  }
+
+  if (res.status === 422 || res.status === 413) {
+    return { category: 'validation', title: 'Invalid File', message: detail, hint };
+  }
+  if (res.status === 400) {
+    return { category: 'parse', title: 'File Parse Error', message: detail, hint };
+  }
+  if (res.status === 404) {
+    return { category: 'server', title: 'Session Not Found', message: detail, hint };
+  }
+  return { category: 'server', title: 'Server Error', message: detail, hint };
+}
+
+/** Client-side file validation before sending to backend */
+function validateFileSelection(file: File): string | null {
+  const ALLOWED = ['.xlsx', '.xls'];
+  const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+  if (!ALLOWED.includes(ext)) {
+    return `"${file.name}" is not an Excel file. Please select a .xlsx or .xls file.`;
+  }
+  const MAX_MB = 50;
+  if (file.size > MAX_MB * 1024 * 1024) {
+    return `"${file.name}" is ${(file.size / (1024 * 1024)).toFixed(1)} MB — exceeds the 50 MB limit. Please compress or split the file.`;
+  }
+  return null;
+}
+
+/** Fetch wrapper with configurable timeout via AbortController */
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 90_000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export default function App() {
   // App Workflow Stages: 'UPLOAD' | 'MAPPING' | 'DASHBOARD'
   const [stage, setStage] = useState<'UPLOAD' | 'MAPPING' | 'DASHBOARD'>('UPLOAD');
@@ -52,7 +137,8 @@ export default function App() {
   // Loading & Error States
   const [loading, setLoading] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>("");
-  const [error, setError] = useState<string | null>(null);
+  const [appError, setAppError] = useState<AppError | null>(null);
+  const [backendOnline, setBackendOnline] = useState<boolean | null>(null); // null = checking
   
   // Session & Dynamic Data
   const [sessionId, setSessionId] = useState<string>("");
@@ -272,23 +358,46 @@ export default function App() {
     );
   };
 
-  // Fetch domain dropdown options on load
+  // Fetch domain dropdown options on load; also acts as a backend connectivity check
   useEffect(() => {
+    setBackendOnline(null);
     fetch(`${API_BASE}/domain-lists`)
-      .then(res => res.json())
-      .then(data => setDomainLists(data))
-      .catch(err => console.error("Failed to load domains:", err));
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(data => {
+        setDomainLists(data);
+        setBackendOnline(true);
+      })
+      .catch(() => {
+        setBackendOnline(false);
+      });
   }, []);
 
   // Handle Monthly File Upload
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeFile) {
-      setError("Please select the active monthly Trial Balance file.");
+      setAppError({ category: 'validation', title: 'No File Selected', message: 'Please select the active monthly Trial Balance file before proceeding.' });
       return;
     }
+
+    // Client-side file validation
+    const activeFileError = validateFileSelection(activeFile);
+    if (activeFileError) {
+      setAppError({ category: 'validation', title: 'Invalid Trial Balance', message: activeFileError });
+      return;
+    }
+    if (priorFile) {
+      const priorFileError = validateFileSelection(priorFile);
+      if (priorFileError) {
+        setAppError({ category: 'validation', title: 'Invalid Prior Workbook', message: priorFileError });
+        return;
+      }
+    }
     
-    setError(null);
+    setAppError(null);
     setLoading(true);
     setStatusMessage("Uploading and parsing Trial Balance data...");
     
@@ -300,17 +409,16 @@ export default function App() {
     formData.append("month", month.toString());
     formData.append("year", year.toString());
     
+    let res: Response | null = null;
     try {
-      const res = await fetch(`${API_BASE}/upload`, {
-        method: "POST",
-        body: formData,
-      });
+      res = await fetchWithTimeout(`${API_BASE}/upload`, { method: "POST", body: formData }, 120_000);
       
-      const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.detail || "Upload pipeline failed.");
+        setAppError(await parseApiError(res, null));
+        return;
       }
-      
+
+      const data = await res.json();
       setSessionId(data.session_id);
       
       if (data.success === false) {
@@ -335,8 +443,8 @@ export default function App() {
         setPlData(data.pl_data);
         setStage('DASHBOARD');
       }
-    } catch (err: any) {
-      setError(err.message || "Something went wrong.");
+    } catch (err: unknown) {
+      setAppError(await parseApiError(res, err));
     } finally {
       setLoading(false);
     }
@@ -347,7 +455,7 @@ export default function App() {
     e.preventDefault();
     setLoading(true);
     setStatusMessage("Saving mapping classifications and writing generated Excel report...");
-    setError(null);
+    setAppError(null);
     
     const formattedMappings = Object.entries(mappings).map(([name, val]) => ({
       ledger_name: name,
@@ -362,21 +470,20 @@ export default function App() {
     formData.append("session_id", sessionId);
     formData.append("mappings_data", JSON.stringify(formattedMappings));
     
+    let res: Response | null = null;
     try {
-      const res = await fetch(`${API_BASE}/map`, {
-        method: "POST",
-        body: formData
-      });
+      res = await fetchWithTimeout(`${API_BASE}/map`, { method: "POST", body: formData }, 120_000);
       
-      const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.detail || "Failed to submit mappings.");
+        setAppError(await parseApiError(res, null));
+        return;
       }
-      
+
+      const data = await res.json();
       setPlData(data.pl_data);
       setStage('DASHBOARD');
-    } catch (err: any) {
-      setError(err.message || "Failed to apply mappings.");
+    } catch (err: unknown) {
+      setAppError(await parseApiError(res, err));
     } finally {
       setLoading(false);
     }
@@ -469,14 +576,49 @@ export default function App() {
         )}
       </header>
 
-      {/* Error Banner */}
-      {error && (
-        <div className="error-banner">
-          <AlertTriangle className="error-icon" size={20} style={{ color: 'var(--accent-red)', flexShrink: 0 }} />
-          <div>
-            <h4 className="error-title">Pipeline Error</h4>
-            <p className="error-desc">{error}</p>
+      {/* Backend Offline Warning Banner */}
+      {backendOnline === false && (
+        <div style={{ background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: '12px', padding: '0.85rem 1.25rem', display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+          <WifiOff size={18} style={{ color: '#ef4444', flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <span style={{ color: '#ef4444', fontWeight: '600', fontSize: '0.875rem' }}>Backend server is offline.</span>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginLeft: '0.5rem' }}>Make sure the Python server is running on port 8000: <code style={{ color: 'var(--accent-teal)' }}>python backend/main.py</code></span>
           </div>
+        </div>
+      )}
+
+      {/* Error Banner */}
+      {appError && (
+        <div className="error-banner" style={{ flexDirection: 'column', gap: '0.6rem', alignItems: 'flex-start' }}>
+          <div style={{ display: 'flex', width: '100%', alignItems: 'flex-start', gap: '0.75rem' }}>
+            <AlertTriangle className="error-icon" size={20} style={{ color: appError.category === 'network' ? '#f59e0b' : 'var(--accent-red)', flexShrink: 0, marginTop: '2px' }} />
+            <div style={{ flex: 1 }}>
+              <h4 className="error-title">{appError.title}</h4>
+              <p className="error-desc">{appError.message}</p>
+              {appError.hint && (
+                <p style={{ margin: '0.4rem 0 0 0', fontSize: '0.78rem', color: 'var(--accent-teal)', fontFamily: 'monospace', background: 'rgba(0,0,0,0.2)', padding: '0.3rem 0.6rem', borderRadius: '6px', display: 'inline-block' }}>
+                  💡 {appError.hint}
+                </p>
+              )}
+            </div>
+            <button
+              onClick={() => setAppError(null)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '2px', borderRadius: '4px', flexShrink: 0 }}
+              title="Dismiss"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          {/* Retry action for network errors */}
+          {appError.category === 'network' && (
+            <button
+              onClick={() => { setAppError(null); setStage('UPLOAD'); }}
+              style={{ marginLeft: '2rem', padding: '0.3rem 0.8rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', cursor: 'pointer', color: 'white', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+            >
+              <RefreshCw size={12} /> Retry Upload
+            </button>
+          )}
         </div>
       )}
 
