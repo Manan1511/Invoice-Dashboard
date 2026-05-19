@@ -7,7 +7,8 @@ from services.ledger_mapper import load_mapped_ledgers
 def extract_pl_dashboard(
     parsed_entries: List[LedgerEntry],
     month_label: str = "Mar'26",
-    ytd_label: str = "YTD'26"
+    ytd_label: str = "YTD'26",
+    has_ytd: bool = True
 ) -> PLDataResponse:
     """Calculates and extracts the P&L breakdown dynamically in Python based on ledger mappings and balances."""
     # 1. Load active mappings
@@ -64,13 +65,13 @@ def extract_pl_dashboard(
         # Head mappings:
         # Sales & Indirect Income are credit balances (credit balance is negative closing in parsed entry, so we do -entry.closing)
         # Expenses & Purchases are debit balances (debit balance is positive closing)
-        val_month = entry.closing or 0.0
-        val_ytd = entry.closing_ytd or 0.0
+        val_month = abs(entry.closing or 0.0)
+        val_ytd = abs(entry.closing_ytd or 0.0)
         
         if mapping.head == "1. Sales Accounts":
             m_sales, y_sales = get_or_create_line('Sales')
-            m_sales[vertical] += -val_month
-            y_sales[vertical] += -val_ytd
+            m_sales[vertical] += val_month
+            y_sales[vertical] += val_ytd
             
         elif mapping.head == "3. Direct Expense":
             classification = mapping.classification or 'Insurance expenses'
@@ -88,8 +89,8 @@ def extract_pl_dashboard(
         elif mapping.head == "2. Indirect Income":
             classification = mapping.classification or 'Foreign Exchange Gain'
             m_ind_inc, y_ind_inc = get_or_create_line(classification)
-            m_ind_inc[vertical] += -val_month
-            y_ind_inc[vertical] += -val_ytd
+            m_ind_inc[vertical] += val_month
+            y_ind_inc[vertical] += val_ytd
             
         elif mapping.head == "6. Indirect Expense":
             classification = mapping.classification or 'Misc Expenses'
@@ -255,5 +256,6 @@ def extract_pl_dashboard(
         ytd_label=ytd_label,
         month_data=m_breakdown,
         ytd_data=y_breakdown,
-        kpis=kpis
+        kpis=kpis,
+        has_ytd=has_ytd
     )

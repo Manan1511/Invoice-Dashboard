@@ -17,3 +17,5 @@ class PLDataResponse(BaseModel):
     month_data: PLBreakdown
     ytd_data: PLBreakdown
     kpis: Dict[str, float]  # e.g., Revenue, Gross Margin %, Net Income, Total Expenses
+    has_ytd: bool = True
+

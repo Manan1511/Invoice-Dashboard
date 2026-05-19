@@ -202,7 +202,12 @@ async def _process_and_finalize_workbook(session_id: str):
     month_label = f"{month_names[month-1]}'{str(year)[-2:]}"
     ytd_label = f"YTD'{str(year)[-2:]}"
     
-    pl_data = extract_pl_dashboard(entries, month_label, ytd_label)
+    pl_data = extract_pl_dashboard(
+        entries, 
+        month_label, 
+        ytd_label, 
+        has_ytd=(has_ytd or prior_path is not None)
+    )
     
     return {
         "success": True,
