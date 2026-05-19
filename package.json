@@ -1,0 +1,14 @@
+{
+  "name": "tally-mis-automation",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install --prefix frontend && pip install -r backend/requirements.txt",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "dev:backend": "cd backend && uvicorn main:app --reload --port 8000",
+    "dev": "npx concurrently --kill-others \"npm run dev:frontend\" \"npm run dev:backend\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
