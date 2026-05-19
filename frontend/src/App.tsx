@@ -74,6 +74,203 @@ export default function App() {
   const [plData, setPlData] = useState<PLDataResponse | null>(null);
   const [activeTab, setActiveTab] = useState<'MONTH' | 'YTD'>('MONTH');
 
+  // Custom Options States & Handlers for dynamic dropdown additions
+  const [customMode, setCustomMode] = useState<Record<string, boolean>>({});
+  const [customValues, setCustomValues] = useState<Record<string, string>>({});
+
+  const saveCustomOption = (
+    ledgerName: string, 
+    columnKey: 'group' | 'head' | 'classification' | 'vertical'
+  ) => {
+    const typedVal = (customValues[`${ledgerName}-${columnKey}`] || '').trim();
+    if (!typedVal) {
+      cancelCustomOption(ledgerName, columnKey);
+      return;
+    }
+
+    const listKey = columnKey === 'head' ? 'heads' :
+                    columnKey === 'group' ? 'groups' :
+                    columnKey === 'classification' ? 'classifications' : 'verticals';
+
+    if (!domainLists[listKey].includes(typedVal)) {
+      setDomainLists({
+        ...domainLists,
+        [listKey]: [...domainLists[listKey], typedVal].sort()
+      });
+    }
+
+    const rowVal = mappings[ledgerName] || {
+      under: "Indirect Expenses",
+      group: "P&L",
+      head: "6. Indirect Expense",
+      classification: "Misc Expenses",
+      vertical: "Common"
+    };
+
+    setMappings({
+      ...mappings,
+      [ledgerName]: {
+        ...rowVal,
+        [columnKey]: typedVal
+      }
+    });
+
+    setCustomMode({
+      ...customMode,
+      [`${ledgerName}-${columnKey}`]: false
+    });
+  };
+
+  const cancelCustomOption = (ledgerName: string, columnKey: string) => {
+    setCustomMode({
+      ...customMode,
+      [`${ledgerName}-${columnKey}`]: false
+    });
+    setCustomValues({
+      ...customValues,
+      [`${ledgerName}-${columnKey}`]: ''
+    });
+  };
+
+  const renderCellDropdown = (
+    ledgerName: string,
+    columnKey: 'group' | 'head' | 'classification' | 'vertical',
+    currentValue: string,
+    options: string[],
+    disabled = false
+  ) => {
+    const modeKey = `${ledgerName}-${columnKey}`;
+    const isCustom = customMode[modeKey];
+    
+    if (isCustom) {
+      return (
+        <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
+          <input
+            type="text"
+            className="form-input"
+            style={{ 
+              flex: 1, 
+              padding: '0.4rem 0.5rem', 
+              fontSize: '0.8rem', 
+              height: '34px',
+              minWidth: '110px'
+            }}
+            placeholder={`Custom ${columnKey}...`}
+            value={customValues[modeKey] || ''}
+            onChange={e => setCustomValues({
+              ...customValues,
+              [modeKey]: e.target.value
+            })}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                saveCustomOption(ledgerName, columnKey);
+              } else if (e.key === 'Escape') {
+                cancelCustomOption(ledgerName, columnKey);
+              }
+            }}
+            autoFocus
+          />
+          <button
+            type="button"
+            className="btn-primary"
+            style={{ 
+              padding: '0.4rem', 
+              height: '34px', 
+              width: '34px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center', 
+              borderRadius: '4px',
+              background: 'var(--accent-emerald)',
+              border: 'none',
+              cursor: 'pointer'
+            }}
+            onClick={() => saveCustomOption(ledgerName, columnKey)}
+          >
+            ✓
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            style={{ 
+              padding: '0.4rem', 
+              height: '34px', 
+              width: '34px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center', 
+              borderRadius: '4px',
+              border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.05)',
+              cursor: 'pointer'
+            }}
+            onClick={() => cancelCustomOption(ledgerName, columnKey)}
+          >
+            ✕
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <select
+        value={currentValue}
+        disabled={disabled}
+        onChange={e => {
+          const val = e.target.value;
+          if (val === "__NEW__") {
+            setCustomMode({
+              ...customMode,
+              [modeKey]: true
+            });
+            setCustomValues({
+              ...customValues,
+              [modeKey]: ""
+            });
+          } else {
+            const rowVal = mappings[ledgerName] || {
+              under: "Indirect Expenses",
+              group: "P&L",
+              head: "6. Indirect Expense",
+              classification: "Misc Expenses",
+              vertical: "Common"
+            };
+            
+            if (columnKey === 'head') {
+              const isBS = val === "Sundry Debtor" || val === "Sundry Creditor";
+              setMappings({
+                ...mappings,
+                [ledgerName]: {
+                  ...rowVal,
+                  head: val,
+                  group: isBS ? "BS" : "P&L",
+                  classification: isBS ? "" : (val === "1. Sales Accounts" ? "Sales" : "Misc Expenses")
+                }
+              });
+            } else {
+              setMappings({
+                ...mappings,
+                [ledgerName]: {
+                  ...rowVal,
+                  [columnKey]: val
+                }
+              });
+            }
+          }
+        }}
+        className="form-select"
+      >
+        {options.map(opt => (
+          <option key={opt} value={opt}>{opt}</option>
+        ))}
+        <option value="__NEW__" style={{ color: 'var(--accent-emerald)', fontWeight: 'bold' }}>
+          + Add Custom...
+        </option>
+      </select>
+    );
+  };
+
   // Fetch domain dropdown options on load
   useEffect(() => {
     fetch(`${API_BASE}/domain-lists`)
@@ -478,76 +675,24 @@ export default function App() {
                       <tr key={ledgerName}>
                         <td className="ledger-name-cell">{ledgerName}</td>
                         <td>
-                          <select 
-                            value={rowVal.head}
-                            onChange={e => {
-                              const newHead = e.target.value;
-                              const isBS = newHead === "Sundry Debtor" || newHead === "Sundry Creditor";
-                              setMappings({
-                                ...mappings,
-                                [ledgerName]: {
-                                  ...rowVal,
-                                  head: newHead,
-                                  group: isBS ? "BS" : "P&L",
-                                  classification: isBS ? "" : (newHead === "1. Sales Accounts" ? "Sales" : "Misc Expenses")
-                                }
-                              });
-                            }}
-                            className="form-select"
-                          >
-                            {domainLists.heads.map(h => (
-                              <option key={h} value={h}>{h}</option>
-                            ))}
-                          </select>
+                          {renderCellDropdown(ledgerName, 'head', rowVal.head, domainLists.heads)}
                         </td>
                         <td>
-                          <select 
-                            value={rowVal.group}
-                            onChange={e => setMappings({
-                              ...mappings,
-                              [ledgerName]: { ...rowVal, group: e.target.value }
-                            })}
-                            className="form-select"
-                          >
-                            {domainLists.groups.map(g => (
-                              <option key={g} value={g}>{g}</option>
-                            ))}
-                          </select>
+                          {renderCellDropdown(ledgerName, 'group', rowVal.group, domainLists.groups)}
                         </td>
                         <td>
-                          <select 
-                            value={rowVal.classification}
-                            disabled={rowVal.head === "Sundry Debtor" || rowVal.head === "Sundry Creditor"}
-                            onChange={e => setMappings({
-                              ...mappings,
-                              [ledgerName]: { ...rowVal, classification: e.target.value }
-                            })}
-                            className="form-select"
-                          >
-                            {rowVal.head === "1. Sales Accounts" ? (
-                              <option value="Sales">Sales</option>
-                            ) : rowVal.head === "5. Purchase Accounts" ? (
-                              <option value="Purchase">Purchase</option>
-                            ) : (
-                              domainLists.classifications.map(c => (
-                                <option key={c} value={c}>{c}</option>
-                              ))
-                            )}
-                          </select>
+                          {renderCellDropdown(
+                            ledgerName, 
+                            'classification', 
+                            rowVal.classification, 
+                            rowVal.head === "1. Sales Accounts" ? ["Sales"] : 
+                            rowVal.head === "5. Purchase Accounts" ? ["Purchase"] : 
+                            domainLists.classifications, 
+                            rowVal.head === "Sundry Debtor" || rowVal.head === "Sundry Creditor"
+                          )}
                         </td>
                         <td>
-                          <select 
-                            value={rowVal.vertical}
-                            onChange={e => setMappings({
-                              ...mappings,
-                              [ledgerName]: { ...rowVal, vertical: e.target.value }
-                            })}
-                            className="form-select"
-                          >
-                            {domainLists.verticals.map(v => (
-                              <option key={v} value={v}>{v}</option>
-                            ))}
-                          </select>
+                          {renderCellDropdown(ledgerName, 'vertical', rowVal.vertical, domainLists.verticals)}
                         </td>
                       </tr>
                     );

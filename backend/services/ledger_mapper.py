@@ -1,8 +1,10 @@
 import openpyxl
+import os
 from typing import List, Set, Dict, Tuple
 from models.ledger import LedgerMapping, LedgerEntry
 
-TEMPLATE_PATH = "templates/MIS_template.xlsx"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TEMPLATE_PATH = os.path.join(BASE_DIR, "templates", "MIS_template.xlsx")
 
 def load_mapped_ledgers() -> Dict[str, LedgerMapping]:
     """Loads existing ledger mappings from the List of Ledgers sheet."""

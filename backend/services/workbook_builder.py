@@ -3,8 +3,8 @@ import shutil
 import os
 from typing import List, Optional
 from models.ledger import LedgerEntry
-
-TEMPLATE_PATH = "templates/MIS_template.xlsx"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TEMPLATE_PATH = os.path.join(BASE_DIR, "templates", "MIS_template.xlsx")
 
 def generate_monthly_workbook(
     parsed_entries: List[LedgerEntry], 

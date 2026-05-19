@@ -35,34 +35,57 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 @app.get("/api/domain-lists")
 async def get_domain_lists():
-    """Returns domain lists for dropdowns in mapping UI."""
+    """Returns domain lists for dropdowns in mapping UI, augmented with existing values in sheet."""
+    from services.ledger_mapper import load_mapped_ledgers
+    
+    # Defaults
+    groups = {"BS", "P&L"}
+    heads = {
+        "Sundry Debtor", "Sundry Creditor", "1. Sales Accounts", 
+        "2. Indirect Income", "3. Direct Expense", "5. Purchase Accounts", 
+        "6. Indirect Expense"
+    }
+    verticals = {
+        "IT", "Bluestreak", "Spices - Vashi", "Share Trading", 
+        "Factory", "Spices - A to Z", "Clarus", "Common"
+    }
+    classifications = {
+        "Accomodation expenses", "Advertisements costs", "Audit Fees", "Bad debt", 
+        "Bank charges", "Brokerage and commission", "Bussiness Development costs", 
+        "CONSULTANT FEE", "Capital Loss", "Commission", "Conveyance expenses", 
+        "Courier charges", "Creative agency charges", "Depreciation", "Dividend ", 
+        "Donation", "Electricity charges", "Exhibitions costs", "Exhibtion Income", 
+        "Export charges", "Foreign Exchange Gain", "Freight & Shipping charges", 
+        "Fuel Expenses", "Indirect Income", "Insurance", "Insurance expenses", 
+        "Interest Income", "Interest expense", "Labour charges", "Loading & Unloading charges", 
+        "Marketing Expense", "Membership Expenses", "Misc Expenses", "Packing Charges", 
+        "Port Expenses", "Printing & Stationery", "Professional charges", 
+        "Profit on sale of Investment ", "Purchase", "Rates & Taxes", "Rent expenses", 
+        "Repairs & maintenance expenses", "Salary & wages", "Sales", "Share trading expenses", 
+        "Short term Capital Gain ", "Staff welfare expenses", "Subscription fees", 
+        "Telephone & Internet charges", "Transportation", "Travelling expenses", "Website charges"
+    }
+    
+    # Load mapped ledgers to dynamically extract any custom added values
+    try:
+        existing = load_mapped_ledgers()
+        for mapping in existing.values():
+            if mapping.group:
+                groups.add(mapping.group)
+            if mapping.head:
+                heads.add(mapping.head)
+            if mapping.vertical:
+                verticals.add(mapping.vertical)
+            if mapping.classification:
+                classifications.add(mapping.classification)
+    except Exception as e:
+        print(f"Error loading existing mappings for domain lists: {e}")
+        
     return {
-        "groups": ["BS", "P&L"],
-        "heads": [
-            "Sundry Debtor", "Sundry Creditor", "1. Sales Accounts", 
-            "2. Indirect Income", "3. Direct Expense", "5. Purchase Accounts", 
-            "6. Indirect Expense"
-        ],
-        "verticals": [
-            "IT", "Bluestreak", "Spices - Vashi", "Share Trading", 
-            "Factory", "Spices - A to Z", "Clarus", "Common"
-        ],
-        "classifications": [
-            "Accomodation expenses", "Advertisements costs", "Audit Fees", "Bad debt", 
-            "Bank charges", "Brokerage and commission", "Bussiness Development costs", 
-            "CONSULTANT FEE", "Capital Loss", "Commission", "Conveyance expenses", 
-            "Courier charges", "Creative agency charges", "Depreciation", "Dividend ", 
-            "Donation", "Electricity charges", "Exhibitions costs", "Exhibtion Income", 
-            "Export charges", "Foreign Exchange Gain", "Freight & Shipping charges", 
-            "Fuel Expenses", "Indirect Income", "Insurance", "Insurance expenses", 
-            "Interest Income", "Interest expense", "Labour charges", "Loading & Unloading charges", 
-            "Marketing Expense", "Membership Expenses", "Misc Expenses", "Packing Charges", 
-            "Port Expenses", "Printing & Stationery", "Professional charges", 
-            "Profit on sale of Investment ", "Purchase", "Rates & Taxes", "Rent expenses", 
-            "Repairs & maintenance expenses", "Salary & wages", "Sales", "Share trading expenses", 
-            "Short term Capital Gain ", "Staff welfare expenses", "Subscription fees", 
-            "Telephone & Internet charges", "Transportation", "Travelling expenses", "Website charges"
-        ]
+        "groups": sorted(list(groups)),
+        "heads": sorted(list(heads)),
+        "verticals": sorted(list(verticals)),
+        "classifications": sorted(list(classifications))
     }
 
 @app.post("/api/upload")

@@ -83,7 +83,7 @@ def _parse_sheet_rows(sheet, is_ytd: bool) -> Dict[str, LedgerEntry]:
     # Parse rows below the header
     for r_idx in range(header_row_idx + 1, sheet.max_row + 1):
         ledger_name = sheet.cell(row=r_idx, column=particulars_col).value
-        if not ledger_name or str(ledger_name).strip() == "" or str(ledger_name).startswith('Total'):
+        if not ledger_name or str(ledger_name).strip() == "" or str(ledger_name).startswith(('Total', 'Grand Total', 'Grand')):
             continue
             
         ledger_name = str(ledger_name).strip()
