@@ -19,6 +19,127 @@ An enterprise-grade **React + FastAPI** web dashboard that automates the monthly
 
 ---
 
+## 📒 How the Accounting Logic Works (CA Perspective)
+
+This tool is built around the same structure a CA would use when preparing a monthly MIS P&L for a multi-vertical trading and services company. Here is how the accounting flows from the raw Tally export to the final report.
+
+---
+
+### 1. The Starting Point — Tally Trial Balance
+
+Every month, Tally Prime is used to export a **Trial Balance (TB)** — the raw list of every ledger account with its **Opening Balance**, **total Debits**, **total Credits**, and **Closing Balance** for the month.
+
+The closing balance of each ledger in Tally is the single source of truth used to build the entire MIS. The system reads the TB sheet directly from this Tally export.
+
+> **YTD columns:** Tally can optionally export a second sheet with cumulative Year-to-Date (from April 1st) figures. If this sheet is present, it is merged in automatically. If not, the prior month's MIS workbook is used to calculate YTD by adding the current month's movement to the prior YTD closing.
+
+---
+
+### 2. Ledger Classification — The Mapping Table
+
+Not all ledger names in Tally mean anything on their own. A ledger like *"HDFC Bank - CC"* needs to be classified before it can appear in a P&L. Every ledger in the system is tagged with four attributes:
+
+| Attribute | Purpose | Examples |
+|---|---|---|
+| **Group** | Is it a P&L item or a Balance Sheet item? | `P&L`, `BS` |
+| **Head** | Which P&L line does it fall under? | `1. Sales Accounts`, `5. Purchase Accounts`, `3. Direct Expense`, `6. Indirect Expense`, `2. Indirect Income` |
+| **Classification** | Sub-category within Indirect Expenses or Indirect Income | `Salary & wages`, `Rent expenses`, `Interest Income`, `Foreign Exchange Gain` |
+| **Business Vertical** | Which vertical generated this income/expense? | `Bluestreak`, `Clarus`, `IT`, `Spices - A to Z`, `Spices - Vashi`, `Share Trading`, `Factory`, `Office`, `Common` |
+
+This mapping is stored permanently in the **`List of Ledgers`** sheet inside `MIS_template.xlsx`. When a new ledger appears in Tally that has never been seen before (e.g. a new bank account, a new expense head), the pipeline pauses and asks the user to classify it before continuing.
+
+> **Custom entries:** If a classification or vertical doesn't exist in the master list yet, the user can type a new one directly in the mapping screen — it gets saved permanently for all future months.
+
+---
+
+### 3. The P&L Structure — How the Statement is Built
+
+Once every ledger is classified, the system builds a **multi-column P&L Statement** where each column is a business vertical. This mirrors the internal MIS format.
+
+```
+                      Bluestreak   Clarus    IT    Spices-AZ   Spices-V   Share Trading   Total
+─────────────────────────────────────────────────────────────────────────────────────────────────
+Sales                     ×           ×       ×        ×           ×            ×            ×
+Less: COGS                ×           ×       ×        ×           ×            ×            ×
+  (Purchases ± Stock Δ)
+3. Direct Expenses        ×           ×       ×        ×           ×            ×            ×
+  Port / Freight / etc.
+─────────────────────────────────────────────────────────────────────────────────────────────────
+Gross Margin              ×           ×       ×        ×           ×            ×            ×
+Gross Margin %            ×           ×       ×        ×           ×            ×            ×
+─────────────────────────────────────────────────────────────────────────────────────────────────
+2. Indirect Income        ×           ×       ×        ×           ×            ×            ×
+  FX Gain / Interest etc.
+─────────────────────────────────────────────────────────────────────────────────────────────────
+6. Indirect Expenses      ×           ×       ×        ×           ×            ×            ×
+  Salary / Rent / etc.
+─────────────────────────────────────────────────────────────────────────────────────────────────
+Allocation of expenses:
+  Factory                 ×           ×       ×        –           –            –            ×
+  Office                  ×           ×       ×        –           –            –            ×
+  Common                  –           ×       –        –           ×            –            ×
+Total Indirect Costs      ×           ×       ×        ×           ×            ×            ×
+─────────────────────────────────────────────────────────────────────────────────────────────────
+Profit / (Loss) before Tax ×          ×       ×        ×           ×            ×            ×
+Net Margin %              ×           ×       ×        ×           ×            ×            ×
+```
+
+**How COGS is calculated:**
+> COGS = Opening Stock + Purchases − Closing Stock
+>
+> Purchases are all ledgers mapped to `5. Purchase Accounts`. Stock values come from the Opening/Closing balance of the *"Opening Stock"* ledger in the TB. Stock changes are attributed to the **Factory** vertical since that is where physical stock is held.
+
+**How Direct Expenses are treated:**
+> Expenses like Port charges, Freight, Insurance, and Export charges are mapped to `3. Direct Expense`. These are deducted from Sales before arriving at Gross Margin (just above COGS in the P&L), because they are directly tied to the cost of selling goods.
+
+---
+
+### 4. Shared Cost Allocation — Factory, Office & Common
+
+Three verticals — **Factory**, **Office**, and **Common** — do not generate revenue independently. Their costs are shared overheads that must be allocated to the revenue-generating verticals.
+
+| Overhead Pool | What it Contains | How it is Allocated |
+|---|---|---|
+| **Factory** | Manufacturing overhead — utilities, labour, factory-specific indirect expenses | Divided equally (⅓ each) across **Bluestreak**, **Clarus**, and **IT** |
+| **Office** | Central office running costs — rent, office salaries, admin | Divided equally (⅓ each) across **Bluestreak**, **Clarus**, and **IT** |
+| **Common** | Shared costs that apply to multiple businesses — common bank charges, shared professionals, etc. | Allocated proportionally to **Clarus** and **Spices - Vashi** based on their **share of total Sales** |
+
+> This replicates the exact SUMIF / ratio formulas used in the master Excel template, so the Python dashboard and the downloaded Excel always agree.
+
+---
+
+### 5. Year-to-Date (YTD) — Cumulative from April 1st
+
+India follows a financial year from **April 1st to March 31st**. All YTD figures in this system accumulate from the start of that fiscal year.
+
+**How YTD is sourced:**
+
+1. **Best case — Tally exports YTD:** Tally Prime can be configured to export a second `TB YTD` sheet with cumulative figures. The system detects this automatically and uses it directly.
+
+2. **Roll-forward — No YTD sheet available:** If the Tally export only has monthly figures, the system reads the **Closing YTD** values from the prior month's finished MIS workbook and adds the current month's movement:
+   ```
+   YTD Closing (This Month) = YTD Closing (Prior Month) + Current Month Movement
+   ```
+
+3. **First month of the year / No prior workbook:** YTD = Monthly figures (April is both the monthly and YTD period).
+
+> If neither a YTD sheet nor a prior workbook is provided, the system still works but marks the YTD tab as **"Not Available"** — no guesses are made with incomplete data.
+
+---
+
+### 6. What the Generated Excel Contains
+
+The downloaded `.xlsx` file is a **formula-intact clone** of the master MIS template. It has:
+
+- **`TB` sheet** — the raw monthly Trial Balance data injected from Tally
+- **`TB YTD` sheet** — the cumulative YTD Trial Balance (rolled forward or directly from Tally)
+- **`List of Ledgers` sheet** — every ledger with its mapping attributes and VLOOKUP formulas that pull figures from the TB sheets
+- **All downstream P&L, COGS, Summary, and Dashboard sheets** — these use Excel VLOOKUP / SUMIF / IFERROR formulas that reference `List of Ledgers` and recalculate automatically when opened in Microsoft Excel
+
+The generated file is ready to be opened, reviewed, and shared — no manual data entry required.
+
+---
+
 ## 🛠️ Architecture & Tech Stack
 
 ```mermaid
