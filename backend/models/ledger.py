@@ -1,20 +1,21 @@
 from pydantic import BaseModel
 from typing import Optional, List
+from decimal import Decimal
 
 class LedgerEntry(BaseModel):
     name: str
-    opening: Optional[float] = None
-    debit: Optional[float] = None
-    credit: Optional[float] = None
-    closing: Optional[float] = None
-    opening_net: Optional[float] = None
-    debit_net: Optional[float] = None
-    credit_net: Optional[float] = None
-    closing_net: Optional[float] = None
-    opening_ytd: Optional[float] = None
-    debit_ytd: Optional[float] = None
-    credit_ytd: Optional[float] = None
-    closing_ytd: Optional[float] = None
+    opening: Optional[Decimal] = None
+    debit: Optional[Decimal] = None
+    credit: Optional[Decimal] = None
+    closing: Optional[Decimal] = None
+    opening_net: Optional[Decimal] = None
+    debit_net: Optional[Decimal] = None
+    credit_net: Optional[Decimal] = None
+    closing_net: Optional[Decimal] = None
+    opening_ytd: Optional[Decimal] = None
+    debit_ytd: Optional[Decimal] = None
+    credit_ytd: Optional[Decimal] = None
+    closing_ytd: Optional[Decimal] = None
 
 class LedgerMapping(BaseModel):
     ledger_name: str
@@ -31,3 +32,10 @@ class SessionMappingState(BaseModel):
     unmapped: List[str]
     mappings: List[LedgerMapping] = []
     parsed_entries: List[LedgerEntry] = []
+
+class MappingError(Exception):
+    def __init__(self, unmapped_ledgers: List[str], message: Optional[str] = None, session_id: Optional[str] = None):
+        self.unmapped_ledgers = unmapped_ledgers
+        self.session_id = session_id
+        self.message = message or f"Unmapped active ledgers encountered: {', '.join(unmapped_ledgers)}"
+        super().__init__(self.message)

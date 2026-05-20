@@ -1,6 +1,7 @@
 import openpyxl
+from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Dict, Optional
-from models.ledger import LedgerEntry
+from models.ledger import LedgerEntry, MappingError
 
 def check_if_tb_has_ytd(parsed_entries: List[LedgerEntry]) -> bool:
     """Checks if the parsed trial balance has YTD values populated."""
@@ -29,13 +30,13 @@ def roll_forward_ytd(
         # No prior month workbook provided, initialize YTD values with current month net signed values (e.g. if it's the first month)
         for entry in current_entries:
             if entry.opening_ytd is None:
-                entry.opening_ytd = entry.opening_net if entry.opening_net is not None else (entry.opening or 0.0)
+                entry.opening_ytd = entry.opening_net if entry.opening_net is not None else (entry.opening or Decimal("0.00"))
             if entry.debit_ytd is None:
-                entry.debit_ytd = entry.debit_net if entry.debit_net is not None else (entry.debit or 0.0)
+                entry.debit_ytd = entry.debit_net if entry.debit_net is not None else (entry.debit or Decimal("0.00"))
             if entry.credit_ytd is None:
-                entry.credit_ytd = entry.credit_net if entry.credit_net is not None else (entry.credit or 0.0)
+                entry.credit_ytd = entry.credit_net if entry.credit_net is not None else (entry.credit or Decimal("0.00"))
             if entry.closing_ytd is None:
-                entry.closing_ytd = entry.closing_net if entry.closing_net is not None else (entry.closing or 0.0)
+                entry.closing_ytd = entry.closing_net if entry.closing_net is not None else (entry.closing or Decimal("0.00"))
         return current_entries
 
     # Load prior month YTD values from its 'List of Ledgers ' sheet
@@ -59,8 +60,23 @@ def roll_forward_ytd(
         cred_ytd = prior_ws.cell(row=r_idx, column=16).value
         clos_ytd = prior_ws.cell(row=r_idx, column=17).value
         
-        # Check current active mapping, default to BS if missing to be safe
+        # Check current active mapping
         mapping = active_mappings.get(name_clean)
+        
+        if not mapping:
+            # Check if this prior ledger has a non-zero balance
+            op_ytd_dec = _to_decimal(op_ytd)
+            deb_ytd_dec = _to_decimal(deb_ytd)
+            cred_ytd_dec = _to_decimal(cred_ytd)
+            clos_ytd_dec = _to_decimal(clos_ytd)
+            
+            if any(val != Decimal("0.00") for val in [op_ytd_dec, deb_ytd_dec, cred_ytd_dec, clos_ytd_dec]):
+                raise MappingError(
+                    unmapped_ledgers=[name],
+                    message=f"CRITICAL ERROR: Prior ledger '{name}' has a non-zero balance "
+                            f"but is NOT mapped in your current master template! Please map it first."
+                )
+            continue
         
         is_pl = False
         if mapping:
@@ -80,26 +96,27 @@ def roll_forward_ytd(
             if is_pl:
                 # P&L accounts wipe completely clean
                 prior_ytd_data[name_clean] = {
-                    "opening_ytd": 0.0,
-                    "debit_ytd": 0.0,
-                    "credit_ytd": 0.0,
-                    "closing_ytd": 0.0
+                    "opening_ytd": Decimal("0.00"),
+                    "debit_ytd": Decimal("0.00"),
+                    "credit_ytd": Decimal("0.00"),
+                    "closing_ytd": Decimal("0.00")
                 }
             else:
                 # Balance Sheet accounts carry forward the CLOSING balance as the new OPENING balance, but reset movements
+                clos_ytd_dec = _to_decimal(clos_ytd)
                 prior_ytd_data[name_clean] = {
-                    "opening_ytd": _to_float(clos_ytd),
-                    "debit_ytd": 0.0,
-                    "credit_ytd": 0.0,
-                    "closing_ytd": _to_float(clos_ytd)
+                    "opening_ytd": clos_ytd_dec,
+                    "debit_ytd": Decimal("0.00"),
+                    "credit_ytd": Decimal("0.00"),
+                    "closing_ytd": clos_ytd_dec
                 }
         else:
             # Standard mid-year roll forward
             prior_ytd_data[name_clean] = {
-                "opening_ytd": _to_float(op_ytd),
-                "debit_ytd": _to_float(deb_ytd),
-                "credit_ytd": _to_float(cred_ytd),
-                "closing_ytd": _to_float(clos_ytd)
+                "opening_ytd": _to_decimal(op_ytd),
+                "debit_ytd": _to_decimal(deb_ytd),
+                "credit_ytd": _to_decimal(cred_ytd),
+                "closing_ytd": _to_decimal(clos_ytd)
             }
         
     for entry in current_entries:
@@ -110,21 +127,21 @@ def roll_forward_ytd(
             continue
             
         prior_vals = prior_ytd_data.get(name_clean, {
-            "opening_ytd": 0.0,
-            "debit_ytd": 0.0,
-            "credit_ytd": 0.0,
-            "closing_ytd": 0.0
+            "opening_ytd": Decimal("0.00"),
+            "debit_ytd": Decimal("0.00"),
+            "credit_ytd": Decimal("0.00"),
+            "closing_ytd": Decimal("0.00")
         })
         
         # Opening YTD (April 1st) remains the same throughout the fiscal year
         entry.opening_ytd = prior_vals["opening_ytd"]
         
         # YTD Debit = Prior YTD Debit + Current Month Debit (signed net)
-        cur_deb = abs(entry.debit_net if entry.debit_net is not None else (entry.debit or 0.0))
+        cur_deb = abs(entry.debit_net if entry.debit_net is not None else (entry.debit or Decimal("0.00")))
         entry.debit_ytd = prior_vals["debit_ytd"] + cur_deb
         
         # YTD Credit = Prior YTD Credit + Current Month Credit (signed net)
-        cur_cred = abs(entry.credit_net if entry.credit_net is not None else (entry.credit or 0.0))
+        cur_cred = abs(entry.credit_net if entry.credit_net is not None else (entry.credit or Decimal("0.00")))
         entry.credit_ytd = prior_vals["credit_ytd"] + cur_cred
         
         # Calculate YTD Closing (signed net)
@@ -132,10 +149,16 @@ def roll_forward_ytd(
         
     return current_entries
 
-def _to_float(val) -> float:
+def _to_decimal(val) -> Decimal:
     if val is None:
-        return 0.0
+        return Decimal("0.00")
     try:
-        return float(val)
-    except ValueError:
-        return 0.0
+        if isinstance(val, (int, float, Decimal)):
+            return Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        s_val = str(val).strip().replace(',', '').replace('₹', '').replace('$', '').replace(' ', '')
+        if s_val in ("", "-", "--"):
+            return Decimal("0.00")
+        return Decimal(s_val).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (ValueError, TypeError, ArithmeticError):
+        return Decimal("0.00")
+

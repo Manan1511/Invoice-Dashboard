@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Optional
 import shutil
 
-from models.ledger import LedgerMapping, LedgerEntry, SessionMappingState
+from models.ledger import LedgerMapping, LedgerEntry, SessionMappingState, MappingError
 from models.pl_data import PLDataResponse
 from services.tb_parser import parse_tally_tb
 from services.ledger_mapper import (
@@ -43,6 +43,19 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         content={
             "detail": "An unexpected server error occurred. Please try again or contact support.",
             "hint": str(exc)
+        }
+    )
+
+# Global custom exception handler for MappingError to force UI into MAPPING stage
+@app.exception_handler(MappingError)
+async def mapping_error_handler(request: Request, exc: MappingError):
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": False,
+            "session_id": exc.session_id,
+            "unmapped_count": len(exc.unmapped_ledgers),
+            "unmapped_ledgers": exc.unmapped_ledgers
         }
     )
 
@@ -305,10 +318,7 @@ async def upload_files(
             detail="No ledger entries were found in the uploaded Trial Balance. Check that the file has a 'TB' sheet with data rows starting from row 5."
         )
 
-    # 5. Check for unmapped ledgers (always against the current master template)
-    unmapped_ledgers = get_unmapped_ledgers(parsed_entries)
-
-    # Store session details
+    # Store session details first so the session is available if we encounter unmapped mappings
     SESSIONS[session_id] = {
         "active_file_path": temp_file_path,
         "prior_file_path": prior_file_path,
@@ -318,15 +328,22 @@ async def upload_files(
         "closing_stock": closing_stock
     }
 
+    # 5. Check for unmapped ledgers in the current Trial Balance
+    unmapped_ledgers = get_unmapped_ledgers(parsed_entries)
     if len(unmapped_ledgers) > 0:
-        return {
-            "success": False,
-            "session_id": session_id,
-            "unmapped_count": len(unmapped_ledgers),
-            "unmapped_ledgers": unmapped_ledgers
-        }
+        raise MappingError(unmapped_ledgers=unmapped_ledgers, session_id=session_id)
 
-    # 6. If NO unmapped ledgers, compile workbook immediately!
+    # 6. Synchronously verify prior month's roll forward if applicable to catch unmapped prior ledgers immediately
+    has_ytd = check_if_tb_has_ytd(parsed_entries)
+    if not has_ytd and prior_file_path:
+        try:
+            roll_forward_ytd(parsed_entries, prior_file_path, month)
+        except MappingError as exc:
+            # Propagate session_id inside the MappingError
+            exc.session_id = session_id
+            raise exc
+
+    # 7. If NO unmapped ledgers, compile workbook in the background!
     PROGRESS_STATES[session_id] = {"status": "processing", "step": "PARSING_TB", "result": None, "error": None}
     background_tasks.add_task(_process_and_finalize_workbook, session_id)
     return {
@@ -459,6 +476,9 @@ async def _process_and_finalize_workbook(session_id: str):
         }
         PROGRESS_STATES[session_id]["status"] = "completed"
 
+    except MappingError as me:
+        PROGRESS_STATES[session_id]["status"] = "error"
+        PROGRESS_STATES[session_id]["error"] = f"Mapping Error: The following active ledgers are not mapped: {', '.join(me.unmapped_ledgers)}"
     except HTTPException as he:
         PROGRESS_STATES[session_id]["status"] = "error"
         PROGRESS_STATES[session_id]["error"] = he.detail

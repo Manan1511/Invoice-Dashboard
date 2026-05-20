@@ -2,6 +2,7 @@ import openpyxl
 import shutil
 import os
 from typing import List, Optional
+from decimal import Decimal
 from models.ledger import LedgerEntry
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TEMPLATE_PATH = os.path.join(BASE_DIR, "templates", "MIS_template.xlsx")
@@ -52,9 +53,11 @@ def generate_monthly_workbook(
     wb.save(output_path)
 
 def _populate_tb_sheet(sheet, entries: List[LedgerEntry], is_ytd: bool):
-    # Clear existing data rows (from row 5 downwards)
+    # Clear existing data rows (from row 5 downwards) safely by setting value to None
     if sheet.max_row >= 5:
-        sheet.delete_rows(5, sheet.max_row - 4)
+        for r_idx in range(5, sheet.max_row + 1):
+            for c_idx in range(1, max(sheet.max_column, 12) + 1):
+                sheet.cell(row=r_idx, column=c_idx).value = None
         
     # Write new data
     for idx, entry in enumerate(entries):
@@ -110,9 +113,11 @@ def _copy_stock_sheets_if_present(uploaded_file_path: str, target_wb):
                 
         if source_sheet and sheet_name in target_wb.sheetnames:
             target_sheet = target_wb[sheet_name]
-            # Clear rows 5 onwards
+            # Clear rows 5 onwards safely by setting value to None
             if target_sheet.max_row >= 5:
-                target_sheet.delete_rows(5, target_sheet.max_row - 4)
+                for r_idx in range(5, target_sheet.max_row + 1):
+                    for c_idx in range(1, max(target_sheet.max_column, 8) + 1):
+                        target_sheet.cell(row=r_idx, column=c_idx).value = None
                 
             # Copy data rows
             for r_idx in range(5, source_sheet.max_row + 1):
@@ -121,7 +126,7 @@ def _copy_stock_sheets_if_present(uploaded_file_path: str, target_wb):
                     val = source_sheet.cell(row=r_idx, column=c_idx).value
                     target_sheet.cell(row=r_idx, column=c_idx, value=val)
 
-def _inject_closing_stock(wb, closing_stock: float):
+def _inject_closing_stock(wb, closing_stock: Decimal):
     """Injects the manual closing stock row into 'Stk ' and 'Stk YTD' sheets under the 'Factory' vertical."""
     for sheet_name in ['Stk ', 'Stk YTD']:
         if sheet_name in wb.sheetnames:
@@ -143,11 +148,11 @@ def _inject_closing_stock(wb, closing_stock: float):
             # Columns:
             # Col 1 (A): Business Verticle -> 'Factory'
             # Col 2 (B): Particulars -> 'Closing Stock (Manual)'
-            # Col 3 (C): Opening Stock -> 0.0
+            # Col 3 (C): Opening Stock -> Decimal("0.00")
             # Col 4 (D): Inwards -> None
             # Col 5 (E): Outwards -> None
             # Col 6 (F): Closing Stock -> closing_stock
             sheet.cell(row=next_row, column=1, value="Factory")
             sheet.cell(row=next_row, column=2, value="Closing Stock (Manual)")
-            sheet.cell(row=next_row, column=3, value=0.0)
+            sheet.cell(row=next_row, column=3, value=Decimal("0.00"))
             sheet.cell(row=next_row, column=6, value=closing_stock)

@@ -1,8 +1,11 @@
 import openpyxl
 import unicodedata
 from typing import List, Dict, Optional, Tuple
+from decimal import Decimal, ROUND_HALF_UP
 from models.ledger import LedgerEntry
 from services.ledger_mapper import clean_ledger_name
+
+CURRENCY_PRECISION = Decimal("0.01")
 
 def parse_tally_tb(file_path: str) -> List[LedgerEntry]:
     wb = openpyxl.load_workbook(file_path, data_only=True)
@@ -130,10 +133,10 @@ def _parse_sheet_rows(sheet, is_ytd: bool) -> Dict[str, LedgerEntry]:
             continue
         
         # Read cell values
-        op_val = _clean_float(sheet.cell(row=r_idx, column=opening_col).value)
-        deb_val = _clean_float(sheet.cell(row=r_idx, column=debit_col).value)
-        cred_val = _clean_float(sheet.cell(row=r_idx, column=credit_col).value)
-        clos_val = _clean_float(sheet.cell(row=r_idx, column=closing_col).value)
+        op_val = _clean_decimal(sheet.cell(row=r_idx, column=opening_col).value)
+        deb_val = _clean_decimal(sheet.cell(row=r_idx, column=debit_col).value)
+        cred_val = _clean_decimal(sheet.cell(row=r_idx, column=credit_col).value)
+        clos_val = _clean_decimal(sheet.cell(row=r_idx, column=closing_col).value)
         
         # Standardize display name casing but keep formatting
         display_name = unicodedata.normalize("NFKD", str(raw_name)).strip().strip('"').strip("'").strip()
@@ -150,10 +153,10 @@ def _parse_sheet_rows(sheet, is_ytd: bool) -> Dict[str, LedgerEntry]:
                 closing_ytd=clos_val
             )
         else:
-            op_net = _clean_float(sheet.cell(row=r_idx, column=opening_net_col).value)
-            deb_net = _clean_float(sheet.cell(row=r_idx, column=debit_net_col).value)
-            cred_net = _clean_float(sheet.cell(row=r_idx, column=credit_net_col).value)
-            clos_net = _clean_float(sheet.cell(row=r_idx, column=closing_net_col).value)
+            op_net = _clean_decimal(sheet.cell(row=r_idx, column=opening_net_col).value)
+            deb_net = _clean_decimal(sheet.cell(row=r_idx, column=debit_net_col).value)
+            cred_net = _clean_decimal(sheet.cell(row=r_idx, column=credit_net_col).value)
+            clos_net = _clean_decimal(sheet.cell(row=r_idx, column=closing_net_col).value)
             
             # Skip if all values are None/Zero
             if not any([op_val, deb_val, cred_val, clos_val, op_net, deb_net, cred_net, clos_net]):
@@ -173,27 +176,27 @@ def _parse_sheet_rows(sheet, is_ytd: bool) -> Dict[str, LedgerEntry]:
             
     return entries
 
-def _clean_float(val) -> Optional[float]:
+def _clean_decimal(val) -> Optional[Decimal]:
     if val is None:
         return None
     try:
-        if isinstance(val, (int, float)):
-            return float(val)
+        if isinstance(val, (int, float, Decimal)):
+            return Decimal(str(val)).quantize(CURRENCY_PRECISION, rounding=ROUND_HALF_UP)
             
         s_val = str(val).strip().lower()
         if not s_val:
             return None
             
         # Determine sign based on Tally suffix
-        multiplier = 1
+        multiplier = Decimal("1")
         if s_val.endswith('cr') or s_val.endswith(' cr'):
-            multiplier = -1
+            multiplier = Decimal("-1")
             if s_val.endswith(' cr'):
                 s_val = s_val[:-3].strip()
             elif s_val.endswith('cr'):
                 s_val = s_val[:-2].strip()
         elif s_val.endswith('dr') or s_val.endswith(' dr'):
-            multiplier = 1
+            multiplier = Decimal("1")
             if s_val.endswith(' dr'):
                 s_val = s_val[:-3].strip()
             elif s_val.endswith('dr'):
@@ -201,7 +204,7 @@ def _clean_float(val) -> Optional[float]:
 
         # Handle parentheses for negative numbers (e.g., (1,234.00))
         if s_val.startswith('(') and s_val.endswith(')'):
-            multiplier *= -1
+            multiplier *= Decimal("-1")
             s_val = s_val[1:-1].strip()
 
         # Strip commas, currency symbols, and spaces
@@ -210,6 +213,6 @@ def _clean_float(val) -> Optional[float]:
         if s_val == "" or s_val == "-" or s_val == "--":
             return None
             
-        return float(s_val) * multiplier
-    except ValueError:
+        return (Decimal(s_val) * multiplier).quantize(CURRENCY_PRECISION, rounding=ROUND_HALF_UP)
+    except (ValueError, TypeError, ArithmeticError):
         return None

@@ -1,6 +1,6 @@
 import openpyxl
 from typing import List, Dict, Optional, Any
-from models.ledger import LedgerMapping, LedgerEntry
+from models.ledger import LedgerMapping, LedgerEntry, MappingError
 from models.pl_data import PLDataResponse, PLBreakdown, PLRow
 from services.ledger_mapper import load_mapped_ledgers, clean_ledger_name
 
@@ -38,6 +38,7 @@ def extract_pl_dashboard(
     # 1. Load and clean active mappings
     mappings = load_mapped_ledgers()
 
+    unmapped_ledgers = []
     # CRITICAL ERROR TRAP: Detect non-zero balance ledgers that are not mapped
     for entry in parsed_entries:
         if not entry.name or entry.name.startswith(("Total", "Opening", "Closing")):
@@ -49,15 +50,15 @@ def extract_pl_dashboard(
         # Check if ledger has non-zero balance
         has_balance = False
         for val in [entry.closing, entry.closing_net, entry.closing_ytd, entry.opening, entry.opening_net, entry.opening_ytd]:
-            if val is not None and abs(val) > 0.001:
+            if val is not None and abs(val) > Decimal("0.001"):
                 has_balance = True
                 break
 
         if has_balance and name_clean not in mappings:
-            raise ValueError(
-                f"CRITICAL ERROR: Ledger '{entry.name}' has a non-zero balance in the Trial Balance "
-                f"but is NOT mapped in your List of Ledgers mapping file! Please map this ledger first."
-            )
+            unmapped_ledgers.append(entry.name)
+
+    if unmapped_ledgers:
+        raise MappingError(unmapped_ledgers=unmapped_ledgers)
 
     # 2. Extract Business Verticals dynamically
     # Clean and normalize vertical names (standard cost centers normalized to title case)
