@@ -8,6 +8,7 @@ An enterprise-grade **React + FastAPI** web dashboard that automates the monthly
 
 | Feature | Description |
 |---|---|
+| ⚙️ **Pure Calculation Engine** | Modular, audit-safe Python class (`Processor`) executing mappings, TB parsing, P&L mathematics, and proportional cost-sweeping with strict `decimal.Decimal` arithmetic |
 | 📥 **Trial Balance Parser** | Parses Tally Prime Excel exports, detecting `TB` / `TB YTD` sheets and extracting monthly + cumulative YTD balances |
 | 🚦 **Dynamic Ledger Mapping** | Detects unmapped ledgers, halts execution, and presents a structured table UI for classification across Group, Head, Business Vertical, and Indirect Expense category |
 | ⚡ **Direct Ledger Upload** | Upload custom master mapping sheets to bypass manual review and update the template instantly |
@@ -143,6 +144,57 @@ The generated file is ready to be opened, reviewed, and shared — no manual dat
 
 ---
 
+## ⚙️ Pure Python Calculation Engine (Processor)
+
+To move away from Excel-template dependencies and allow raw, audit-compliant programmatic calculations, the pipeline features a modular **Processor Class** in [processor.py](file:///c:/Users/manan/Downloads/Projects/Invoice%20Dashboard/backend/services/processor.py) that performs financial computations in memory.
+
+### 1. Key Highlights & Financial Engineering
+* **Strict Numeric Precision**: Uses Python's high-precision `decimal.Decimal` with standard `ROUND_HALF_UP` truncation to two decimal places across all aggregations, stock values, and ratios. This completely eliminates float penny drift.
+* **Tally & ERP Currency Parser**: A robust `to_decimal` parser that automatically strips commas and currencies, handles credit/debit suffixes (`cr`/`dr`), and converts parentheses `(500.00)` to negative numbers correctly.
+* **Orphan Ledger Boundary**: If an active (non-zero balance) ledger in the Trial Balance is missing from the mappings sheet, the engine halts and throws a custom `MappingError` showing the culprit ledger and its balance.
+* **Overhead Sweeping & Zero-Sales Fallback**: Costs in Cost Centers (like `Common`, `Office`, or `Factory`) are dynamically swept. If total operational sales are non-zero, overhead is allocated proportionally by sales share. If sales are a flat zero (e.g. pre-revenue period), it automatically falls back to an **Even Split** across operational units to avoid corporate cost-distortion.
+
+### 2. Pipeline Interface & Usage Example
+```python
+from decimal import Decimal
+from services.processor import Processor
+
+engine = Processor()
+
+# Ingest mapping files (Excel or CSV)
+mappings = engine.load_mappings("mappings.xlsx")
+
+# Parse Trial Balance (Excel or CSV), validating mapped states
+try:
+    parsed_tb = engine.parse_tb("trial_balance.csv", mappings)
+except MappingError as e:
+    print(f"Mapping blocker: {e}")
+    raise
+
+# Define inventory stock parameters
+stock_data = {
+    "Bluestreak": {
+        "opening": Decimal("3469525.43"),
+        "closing": Decimal("3473638.67")
+    }
+}
+
+# Run sequential financial aggregates
+financials = engine.calculate_financials(parsed_tb, stock_data)
+
+# Perform overhead sweeps
+final_report = engine.allocate_overheads(financials)
+```
+
+### 3. Execution of Calculation Engine Tests
+A comprehensive test suite covering all mapping and financial engine mathematics is located at [test_processor.py](file:///c:/Users/manan/Downloads/Projects/Invoice%20Dashboard/backend/tests/test_processor.py). Run them directly:
+```bash
+cd backend
+python -m unittest tests/test_processor.py
+```
+
+---
+
 ## 🛠️ Architecture & Tech Stack
 
 ```mermaid
@@ -193,7 +245,10 @@ Invoice Dashboard/
 │   │   ├── ledger_mapper.py     # Mapping rule loader & template appender
 │   │   ├── ytd_calculator.py    # YTD detection & roll-forward from prior workbook
 │   │   ├── workbook_builder.py  # Template clone & data injection via openpyxl
-│   │   └── pl_extractor.py      # Multi-vertical P&L computation (6 categories, 11 verticals)
+│   │   ├── pl_extractor.py      # Multi-vertical P&L computation (6 categories, 11 verticals)
+│   │   └── processor.py         # Pure calculation engine (load, parse, P&L math, cost sweep)
+│   ├── tests/
+│   │   └── test_processor.py    # Comprehensive unit tests for the pure calculation engine
 │   ├── uploads/                 # Temp storage for uploaded files (git-ignored)
 │   └── workbooks/               # Generated monthly MIS output files (git-ignored)
 ├── docs/
