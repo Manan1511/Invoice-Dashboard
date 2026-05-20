@@ -97,13 +97,20 @@ def _parse_sheet_rows(sheet, is_ytd: bool) -> Dict[str, LedgerEntry]:
                 elif col_lower == 'closing':
                     closing_net_col = c_idx
 
+    # Use a set for O(1) lookup and exact matching, not .startswith()
+    FOOTER_EXCLUSIONS = {'total', 'grand total', 'grand', 'net profit', 'net loss'}
+
     # Parse rows below the header
     for r_idx in range(header_row_idx + 1, sheet.max_row + 1):
-        ledger_name = sheet.cell(row=r_idx, column=particulars_col).value
-        if not ledger_name or str(ledger_name).strip() == "" or str(ledger_name).startswith(('Total', 'Grand Total', 'Grand')):
+        raw_name = sheet.cell(row=r_idx, column=particulars_col).value
+        if not raw_name:
             continue
             
-        ledger_name = str(ledger_name).strip()
+        ledger_name = str(raw_name).strip()
+        
+        # Check for exact matches to avoid dropping legitimate ledgers like "Total Office Supplies"
+        if ledger_name.lower() in FOOTER_EXCLUSIONS:
+            continue
         
         # Read cell values
         op_val = _clean_float(sheet.cell(row=r_idx, column=opening_col).value)
