@@ -10,6 +10,8 @@ An enterprise-grade **React + FastAPI** web dashboard that automates the monthly
 |---|---|
 | 📥 **Trial Balance Parser** | Parses Tally Prime Excel exports, detecting `TB` / `TB YTD` sheets and extracting monthly + cumulative YTD balances |
 | 🚦 **Dynamic Ledger Mapping** | Detects unmapped ledgers, halts execution, and presents a structured table UI for classification across Group, Head, Business Vertical, and Indirect Expense category |
+| ⚡ **Direct Ledger Upload** | Upload custom master mapping sheets to bypass manual review and update the template instantly |
+| 🔍 **Bulk Excel Resolver** | Drag-and-drop a custom mapping list when unmapped ledgers are found to automatically resolve matches instantly without manual dropdowns |
 | ➕ **Custom Dropdown Options** | Users can type any custom value directly inside a mapping dropdown and save it to the master list on-the-fly |
 | 🔄 **YTD Roll-Forward Engine** | If the TB export has no YTD columns, the system rolls forward YTD balances from the prior month's MIS workbook automatically |
 | ⚠️ **YTD Data Not Available State** | When no YTD data and no prior workbook is provided, the YTD tab displays a premium glassmorphic warning card with actionable resolution steps |
@@ -272,13 +274,15 @@ npm run dev:backend    # FastAPI + Uvicorn only (hot-reload enabled)
 1. Select the report **Month** and **Fiscal Year**.
 2. Upload the **Active Trial Balance** (`.xlsx` / `.xls`, max 50 MB) exported from Tally Prime.
 3. Optionally upload the **Prior Month MIS Workbook** to enable YTD roll-forward.
-4. Click **Proceed to Mapping Check**.
+4. Optionally upload a custom **List of Ledgers** file. You can choose to **Apply Directly** (instant update) or **Review & Edit First**.
+5. Click **Proceed to Mapping Check**.
 
 ### Stage 2 — Ledger Mapping *(skipped if all ledgers are already mapped)*
 1. Any ledger not present in the master mapping template is listed in a structured table.
-2. For each, select the **Accounting Head**, **Group** (BS/P&L), **Classification**, and **Business Vertical**.
-3. Use **+ Add Custom…** in any dropdown to create a new option that persists for future months.
-4. Click **Approve Mappings & Build MIS** to trigger Excel generation.
+2. **Bulk Resolve via Excel:** Drop a master ledger list Excel workbook in the resolver zone to instantly auto-populate matching ledgers.
+3. For remaining ledgers, select the **Accounting Head**, **Group** (BS/P&L), **Classification**, and **Business Vertical**.
+4. Use **+ Add Custom…** in any dropdown to create a new option that persists for future months.
+5. Click **Approve Mappings & Build MIS** to trigger Excel generation.
 
 ### Stage 3 — Interactive Dashboard
 - Switch between **Monthly Review** and **YTD Review** tabs.
@@ -295,6 +299,9 @@ npm run dev:backend    # FastAPI + Uvicorn only (hot-reload enabled)
 | `GET` | `/api/domain-lists` | Returns dropdown options (groups, heads, verticals, classifications) |
 | `POST` | `/api/upload` | Upload TB file + optional prior workbook; returns unmapped ledgers or full `pl_data` |
 | `POST` | `/api/map` | Submit ledger mappings; triggers workbook generation; returns `pl_data` |
+| `POST` | `/api/parse-ledgers` | Parses an uploaded List of Ledgers Excel file for review or bulk resolution |
+| `POST` | `/api/confirm-ledgers` | Submits edited mappings to permanently replace the 'List of Ledgers' sheet |
+| `POST` | `/api/upload-ledgers-direct` | Parses and immediately applies an uploaded List of Ledgers Excel file |
 | `GET` | `/api/download?session_id=...` | Stream the generated `.xlsx` MIS report |
 
 ### `POST /api/upload` — Request
