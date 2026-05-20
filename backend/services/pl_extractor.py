@@ -4,6 +4,15 @@ from models.ledger import LedgerMapping, LedgerEntry
 from models.pl_data import PLDataResponse, PLBreakdown, PLRow
 from services.ledger_mapper import load_mapped_ledgers
 
+from decimal import Decimal, ROUND_HALF_UP
+
+# Helper to convert to Decimal
+def _to_dec(val):
+    try:
+        return Decimal(str(val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    except:
+        return Decimal('0.00')
+
 def extract_pl_dashboard(
     parsed_entries: List[LedgerEntry],
     month_label: str = "Mar'26",
@@ -28,13 +37,13 @@ def extract_pl_dashboard(
     
     # Initialize aggregated monthly and YTD data structures
     # Structure: monthly_data[line_item][vertical] = value
-    monthly_data: Dict[str, Dict[str, float]] = {}
-    ytd_data: Dict[str, Dict[str, float]] = {}
+    monthly_data: Dict[str, Dict[str, Decimal]] = {}
+    ytd_data: Dict[str, Dict[str, Decimal]] = {}
     
     def get_or_create_line(item_name: str):
         if item_name not in monthly_data:
-            monthly_data[item_name] = {v: 0.0 for v in all_verticals}
-            ytd_data[item_name] = {v: 0.0 for v in all_verticals}
+            monthly_data[item_name] = {v: Decimal('0.00') for v in all_verticals}
+            ytd_data[item_name] = {v: Decimal('0.00') for v in all_verticals}
         return monthly_data[item_name], ytd_data[item_name]
 
     # Pre-populate empty lines for all P&L row categories
@@ -70,11 +79,11 @@ def extract_pl_dashboard(
         # Head mappings:
         # Sales & Indirect Income are credit balances (credit balance is negative closing in parsed entry, so we do -entry.closing)
         # Expenses & Purchases are debit balances (debit balance is positive closing)
-        op_val = entry.opening if entry.opening is not None else 0.0
-        cl_val = entry.closing if entry.closing is not None else 0.0
+        op_val = _to_dec(entry.opening) if entry.opening is not None else Decimal('0.00')
+        cl_val = _to_dec(entry.closing) if entry.closing is not None else Decimal('0.00')
         val_month = cl_val - op_val
 
-        val_ytd = entry.closing_ytd if entry.closing_ytd is not None else 0.0
+        val_ytd = _to_dec(entry.closing_ytd) if entry.closing_ytd is not None else Decimal('0.00')
         
         # Ensure Sales and Incomes are strictly positive for dashboard metrics and charts.
         # But use negative multiplication instead of abs() so that Sales Returns (Debits) properly reduce revenue.
@@ -122,9 +131,9 @@ def extract_pl_dashboard(
             
         # Calculate Purchases/COGS
         # Accumulate stock dynamically per vertical
-        stock_changes = {v: 0.0 for v in all_verticals}
-        total_op_stock = {v: 0.0 for v in all_verticals}
-        total_cl_stock = {v: 0.0 for v in all_verticals}
+        stock_changes = {v: Decimal('0.00') for v in all_verticals}
+        total_op_stock = {v: Decimal('0.00') for v in all_verticals}
+        total_cl_stock = {v: Decimal('0.00') for v in all_verticals}
         
         # 1. Sum up everything as it exists in Tally
         for ledger_name, mapping in mappings.items():
@@ -135,18 +144,18 @@ def extract_pl_dashboard(
                     if v not in all_verticals and v != 'Share Trading':
                         v = 'Common'
                         
-                    total_op_stock[v] += (entry.opening if not is_ytd else (entry.opening_ytd or 0.0))
-                    total_cl_stock[v] += (entry.closing if not is_ytd else (entry.closing_ytd or 0.0))
+                    total_op_stock[v] += _to_dec(entry.opening if not is_ytd else (entry.opening_ytd or Decimal('0.00')))
+                    total_cl_stock[v] += _to_dec(entry.closing if not is_ytd else (entry.closing_ytd or Decimal('0.00')))
 
         # 2. Apply the override once per vertical and calculate final change
         for v in all_verticals:
-            final_cl = closing_stock if (closing_stock > 0 and v == 'Factory') else total_cl_stock[v]
+            final_cl = _to_dec(closing_stock) if (closing_stock > 0.0 and v == 'Factory') else total_cl_stock[v]
             stock_changes[v] = total_op_stock[v] - final_cl
 
         # Apply changes to the correct verticals
         for v in all_verticals:
-            purch = data.get('COGS_Purchases', {}).get(v, 0.0)
-            data['Less: COGS'][v] = purch + stock_changes.get(v, 0.0)
+            purch = data.get('COGS_Purchases', {}).get(v, Decimal('0.00'))
+            data['Less: COGS'][v] = purch + stock_changes.get(v, Decimal('0.00'))
             
         # Totals for Sales, COGS, Direct Expense (without share trading)
         data['Sales']['Total (without share trading)'] = sum(data['Sales'][v] for v in operating_verticals)
@@ -164,7 +173,7 @@ def extract_pl_dashboard(
             if abs(data['Sales'][v]) > 0.01:
                 data['Gross margin %'][v] = data['Gross margin'][v] / data['Sales'][v]
             else:
-                data['Gross margin %'][v] = 0.0
+                data['Gross margin %'][v] = Decimal('0.00')
                 
         # Calculate Indirect Income total
         for v in all_verticals:
@@ -195,14 +204,14 @@ def extract_pl_dashboard(
         factory_total_pool = factory_cogs + factory_ind
         
         factory_targets = [v for v in mapped_verticals if v not in {'Factory', 'Office', 'Common'}]
-        factory_share = factory_total_pool / (len(factory_targets) or 1.0)
+        factory_share = factory_total_pool / (len(factory_targets) or Decimal('1.0'))
         
         for target in factory_targets:
             data['Factory'][target] = factory_share
             
         data['Factory']['Factory'] = -factory_total_pool
-        data['Factory']['Total (without share trading)'] = 0.0
-        data['Factory']['Total (including share trading)'] = 0.0
+        data['Factory']['Total (without share trading)'] = Decimal('0.00')
+        data['Factory']['Total (including share trading)'] = Decimal('0.00')
         
         # Office Allocation: Office costs allocated to targeted verticals
         office_cogs = data['Less: COGS']['Office']
@@ -210,14 +219,14 @@ def extract_pl_dashboard(
         office_total_pool = office_cogs + office_ind
         
         office_targets = [v for v in mapped_verticals if v not in {'Factory', 'Office', 'Common'}]
-        office_share = office_total_pool / (len(office_targets) or 1.0)
+        office_share = office_total_pool / (len(office_targets) or Decimal('1.0'))
         
         for target in office_targets:
             data['Office'][target] = office_share
             
         data['Office']['Office'] = -office_total_pool
-        data['Office']['Total (without share trading)'] = 0.0
-        data['Office']['Total (including share trading)'] = 0.0
+        data['Office']['Total (without share trading)'] = Decimal('0.00')
+        data['Office']['Total (including share trading)'] = Decimal('0.00')
         
         # Common Allocation: Common costs allocated proportionally to all revenue-generating verticals
         common_ind = data['Indirect costs']['Common']
@@ -230,15 +239,15 @@ def extract_pl_dashboard(
             if total_revenue_pool > 0:
                 data['Common'][v] = common_ind * (data['Sales'][v] / total_revenue_pool)
             else:
-                data['Common'][v] = common_ind * (1.0 / (len(revenue_verticals) or 1.0))
+                data['Common'][v] = common_ind * (Decimal('1.0') / (len(revenue_verticals) or Decimal('1.0')))
             
         data['Common']['Common'] = -common_ind
-        data['Common']['Total (without share trading)'] = 0.0
-        data['Common']['Total (including share trading)'] = 0.0
+        data['Common']['Total (without share trading)'] = Decimal('0.00')
+        data['Common']['Total (including share trading)'] = Decimal('0.00')
             
         # Total indirect costs
         for v in all_verticals:
-            data['Total indirect costs'][v] = data['Indirect costs'][v] + (data['Factory'][v] or 0.0) + (data['Office'][v] or 0.0) + (data['Common'][v] or 0.0)
+            data['Total indirect costs'][v] = data['Indirect costs'][v] + (data['Factory'][v] or Decimal('0.00')) + (data['Office'][v] or Decimal('0.00')) + (data['Common'][v] or Decimal('0.00'))
             
         # Profit / Loss before tax
         for v in all_verticals:
@@ -246,7 +255,7 @@ def extract_pl_dashboard(
             if abs(data['Sales'][v]) > 0.01:
                 data['Net margin %'][v] = data['Profit/ (loss) before tax'][v] / data['Sales'][v]
             else:
-                data['Net margin %'][v] = 0.0
+                data['Net margin %'][v] = Decimal('0.00')
 
         for cat in direct_expense_items + indirect_income_items + indirect_expense_items:
             data[cat]['Total (without share trading)'] = sum(data[cat][v] for v in operating_verticals)

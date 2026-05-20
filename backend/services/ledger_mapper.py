@@ -84,6 +84,9 @@ def _parse_ledger_sheet(ws) -> List[LedgerMapping]:
     return mappings
 
 
+from functools import lru_cache
+
+@lru_cache(maxsize=1)
 def load_mapped_ledgers(path: Optional[str] = None) -> Dict[str, LedgerMapping]:
     """
     Loads existing ledger mappings from the List of Ledgers sheet.
