@@ -61,7 +61,19 @@ def roll_forward_ytd(
         
         # Check current active mapping, default to BS if missing to be safe
         mapping = active_mappings.get(name_clean)
-        is_pl = mapping and "P&L" in (mapping.group or "").upper()
+        
+        is_pl = False
+        if mapping:
+            # Check against the standard Heads that strictly belong to the Profit & Loss statement
+            pl_heads = {
+                "1. Sales Accounts", 
+                "2. Indirect Income", 
+                "3. Direct Expense", 
+                "4. Direct Income", 
+                "5. Purchase Accounts", 
+                "6. Indirect Expense"
+            }
+            is_pl = mapping.head in pl_heads
         
         # If it's April (month 4), reset appropriately based on active mapping Group
         if month == 4:
@@ -108,11 +120,11 @@ def roll_forward_ytd(
         entry.opening_ytd = prior_vals["opening_ytd"]
         
         # YTD Debit = Prior YTD Debit + Current Month Debit (signed net)
-        cur_deb = entry.debit_net if entry.debit_net is not None else (entry.debit or 0.0)
+        cur_deb = abs(entry.debit_net if entry.debit_net is not None else (entry.debit or 0.0))
         entry.debit_ytd = prior_vals["debit_ytd"] + cur_deb
         
         # YTD Credit = Prior YTD Credit + Current Month Credit (signed net)
-        cur_cred = entry.credit_net if entry.credit_net is not None else (entry.credit or 0.0)
+        cur_cred = abs(entry.credit_net if entry.credit_net is not None else (entry.credit or 0.0))
         entry.credit_ytd = prior_vals["credit_ytd"] + cur_cred
         
         # Calculate YTD Closing (signed net)

@@ -219,11 +219,14 @@ def extract_pl_dashboard(
         common_ind = data['Indirect costs']['Common']
         
         revenue_verticals = [v for v in mapped_verticals if v not in {'Factory', 'Office', 'Common'}]
-        total_revenue_pool = sum(data['Sales'][v] for v in revenue_verticals) or 1.0
+        total_revenue_pool = sum(data['Sales'][v] for v in revenue_verticals)
         
         # Allocate proportionally to ensure 100% distribution and no orphaned costs
         for v in revenue_verticals:
-            data['Common'][v] = common_ind * (data['Sales'][v] / total_revenue_pool)
+            if total_revenue_pool > 0:
+                data['Common'][v] = common_ind * (data['Sales'][v] / total_revenue_pool)
+            else:
+                data['Common'][v] = common_ind * (1.0 / (len(revenue_verticals) or 1.0))
             
         data['Common']['Common'] = -common_ind
         data['Common']['Total (without share trading)'] = 0.0
@@ -240,6 +243,10 @@ def extract_pl_dashboard(
                 data['Net margin %'][v] = data['Profit/ (loss) before tax'][v] / data['Sales'][v]
             else:
                 data['Net margin %'][v] = 0.0
+
+        for cat in direct_expense_items + indirect_income_items + indirect_expense_items:
+            data[cat]['Total (without share trading)'] = sum(data[cat][v] for v in operating_verticals)
+            data[cat]['Total (including share trading)'] = data[cat]['Total (without share trading)'] + data[cat]['Share Trading']
 
     # 5. Format responses
     def build_breakdown(data_dict) -> PLBreakdown:
