@@ -19,7 +19,11 @@ def extract_pl_dashboard(
     entries_map: Dict[str, LedgerEntry] = {e.name.lower(): e for e in parsed_entries}
     
     # 2. Define Verticals and Columns
-    operating_verticals = ['Bluestreak', 'Clarus', 'IT', 'Factory', 'Office', 'Common', 'Spices - A to Z', 'Spices - Vashi']
+    # Dynamically extract all unique verticals mapped by the user
+    mapped_verticals = set(m.vertical for m in mappings.values() if m.vertical and m.vertical != 'Share Trading')
+    
+    # Ensure core shared pools exist, then convert to list
+    operating_verticals = list(mapped_verticals.union({'Factory', 'Office', 'Common'}))
     all_verticals = operating_verticals + ['Total (without share trading)', 'Share Trading', 'Total (including share trading)']
     
     # Initialize aggregated monthly and YTD data structures
@@ -114,36 +118,29 @@ def extract_pl_dashboard(
             data['3. Direct Expense'][v] = sum(data[cat][v] for cat in direct_expense_items)
             
         # Calculate Purchases/COGS
-        # We can fetch opening and closing stock from parsed stock sheets if we want.
-        # But if they are empty, let's use the direct values from TB opening stock / closing stock!
-        # Opening Stock ledger is usually mapped to "5. Purchase Accounts" or "Opening Stock".
-        # Let's see: Opening stock in TB has name "Opening Stock".
-        # Safer way to find the stock ledger based on mapping rather than exact name match
-        opening_stock_entry = None
+        # Accumulate stock dynamically per vertical
+        stock_changes = {v: 0.0 for v in all_verticals}
+        
         for ledger_name, mapping in mappings.items():
             if mapping.classification == 'Opening Stock' or mapping.head == 'Stock-in-hand':
-                opening_stock_entry = entries_map.get(ledger_name)
-                if opening_stock_entry:
-                    break
+                entry = entries_map.get(ledger_name)
+                if entry:
+                    v = mapping.vertical or 'Factory'
+                    if v not in all_verticals and v != 'Share Trading':
+                        v = 'Common'
+                        
+                    op_val = entry.opening if not is_ytd else (entry.opening_ytd or 0.0)
+                    cl_val = entry.closing if not is_ytd else (entry.closing_ytd or 0.0)
                     
-        # Fallback just in case
-        if not opening_stock_entry:
-            opening_stock_entry = entries_map.get('opening stock')
-        op_stock_m = opening_stock_entry.opening if (opening_stock_entry and not is_ytd) else (opening_stock_entry.opening_ytd if (opening_stock_entry and is_ytd) else 0.0)
-        cl_stock_m = opening_stock_entry.closing if (opening_stock_entry and not is_ytd) else (opening_stock_entry.closing_ytd if (opening_stock_entry and is_ytd) else 0.0)
-        
-        # Let's allocate stock to verticals. Factory usually holds the main stock.
-        # Let's assume stock is in Factory or Common or allocated.
-        # For our Python P&L calculations, we will sum up purchases and adjust for stock change:
+                    # Use global closing_stock override if provided, otherwise use ledger
+                    final_cl_val = closing_stock if (closing_stock > 0 and v == 'Factory') else cl_val
+                    
+                    stock_changes[v] += (op_val or 0.0) - (final_cl_val or 0.0)
+
+        # Apply changes to the correct verticals
         for v in all_verticals:
             purch = data.get('COGS_Purchases', {}).get(v, 0.0)
-            # COGS = Opening Stock + Purchases - Closing Stock
-            # If vertical is Factory, we can include stock change
-            stock_change = 0.0
-            if v == 'Factory':
-                final_cl_stock = closing_stock if closing_stock > 0 else (cl_stock_m or 0.0)
-                stock_change = (op_stock_m or 0.0) - final_cl_stock
-            data['Less: COGS'][v] = purch + stock_change
+            data['Less: COGS'][v] = purch + stock_changes.get(v, 0.0)
             
         # Totals for Sales, COGS, Direct Expense (without share trading)
         data['Sales']['Total (without share trading)'] = sum(data['Sales'][v] for v in operating_verticals)
@@ -190,7 +187,7 @@ def extract_pl_dashboard(
         factory_ind = data['Indirect costs']['Factory']
         factory_total_pool = factory_cogs + factory_ind
         
-        factory_targets = ['Bluestreak', 'Clarus', 'IT']
+        factory_targets = [v for v in mapped_verticals if v not in {'Factory', 'Office', 'Common'}]
         factory_share = factory_total_pool / (len(factory_targets) or 1.0)
         
         for target in factory_targets:
@@ -205,7 +202,7 @@ def extract_pl_dashboard(
         office_ind = data['Indirect costs']['Office']
         office_total_pool = office_cogs + office_ind
         
-        office_targets = ['Bluestreak', 'Clarus', 'IT']
+        office_targets = [v for v in mapped_verticals if v not in {'Factory', 'Office', 'Common'}]
         office_share = office_total_pool / (len(office_targets) or 1.0)
         
         for target in office_targets:
@@ -218,7 +215,7 @@ def extract_pl_dashboard(
         # Common Allocation: Common costs allocated proportionally to all revenue-generating verticals
         common_ind = data['Indirect costs']['Common']
         
-        revenue_verticals = ['Bluestreak', 'Clarus', 'IT', 'Spices - A to Z', 'Spices - Vashi']
+        revenue_verticals = [v for v in mapped_verticals if v not in {'Factory', 'Office', 'Common'}]
         total_revenue_pool = sum(data['Sales'][v] for v in revenue_verticals) or 1.0
         
         # Allocate proportionally to ensure 100% distribution and no orphaned costs

@@ -152,10 +152,16 @@ def _clean_float(val) -> Optional[float]:
     try:
         if isinstance(val, (int, float)):
             return float(val)
-        # Parse string
+            
         s_val = str(val).replace(',', '').strip()
+        
+        # Strip Tally's standard Dr/Cr suffixes
+        if s_val.lower().endswith(' dr') or s_val.lower().endswith(' cr'):
+            s_val = s_val[:-3].strip()
+            
         if s_val == "" or s_val == "-":
             return None
+            
         return float(s_val)
     except ValueError:
         return None
