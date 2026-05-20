@@ -104,9 +104,7 @@ def _parse_ledger_sheet(ws) -> List[LedgerMapping]:
     return mappings
 
 
-from functools import lru_cache
 
-@lru_cache(maxsize=1)
 def load_mapped_ledgers(path: Optional[str] = None) -> Dict[str, LedgerMapping]:
     """
     Loads existing ledger mappings from the List of Ledgers sheet.
@@ -134,6 +132,9 @@ def load_mapped_ledgers(path: Optional[str] = None) -> Dict[str, LedgerMapping]:
         wb.close()
 
     return {clean_ledger_name(m.ledger_name): m for m in mappings_list}
+
+load_mapped_ledgers.cache_clear = lambda: None
+
 
 
 def parse_ledger_file(file_path: str) -> List[LedgerMapping]:

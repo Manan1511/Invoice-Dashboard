@@ -111,10 +111,15 @@ def _parse_sheet_rows(sheet, is_ytd: bool) -> Dict[str, LedgerEntry]:
     FOOTER_EXCLUSIONS = {'total', 'grand total', 'grand', 'net profit', 'net loss'}
 
     # Parse rows below the header
+    consecutive_empty = 0
     for r_idx in range(header_row_idx + 1, sheet.max_row + 1):
         raw_name = sheet.cell(row=r_idx, column=particulars_col).value
-        if not raw_name:
+        if not raw_name or str(raw_name).strip() == "":
+            consecutive_empty += 1
+            if consecutive_empty > 50:
+                break
             continue
+        consecutive_empty = 0
             
         clean_name = clean_ledger_name(raw_name)
         if not clean_name:

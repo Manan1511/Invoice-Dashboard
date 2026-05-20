@@ -40,6 +40,8 @@ def extract_pl_dashboard(
 
     # CRITICAL ERROR TRAP: Detect non-zero balance ledgers that are not mapped
     for entry in parsed_entries:
+        if not entry.name or entry.name.startswith(("Total", "Opening", "Closing")):
+            continue
         name_clean = clean_ledger_name(entry.name)
         if name_clean in {"particulars", "grand total", "total", "grand", "net profit", "net loss"}:
             continue
