@@ -70,7 +70,10 @@ def extract_pl_dashboard(
         # Head mappings:
         # Sales & Indirect Income are credit balances (credit balance is negative closing in parsed entry, so we do -entry.closing)
         # Expenses & Purchases are debit balances (debit balance is positive closing)
-        val_month = entry.closing if entry.closing is not None else 0.0
+        op_val = entry.opening if entry.opening is not None else 0.0
+        cl_val = entry.closing if entry.closing is not None else 0.0
+        val_month = cl_val - op_val
+
         val_ytd = entry.closing_ytd if entry.closing_ytd is not None else 0.0
         
         # Ensure Sales and Incomes are strictly positive for dashboard metrics and charts.
@@ -158,7 +161,7 @@ def extract_pl_dashboard(
         # Calculate Gross Margin
         for v in all_verticals:
             data['Gross margin'][v] = data['Sales'][v] - data['Less: COGS'][v] - data['3. Direct Expense'][v]
-            if data['Sales'][v] != 0:
+            if abs(data['Sales'][v]) > 0.01:
                 data['Gross margin %'][v] = data['Gross margin'][v] / data['Sales'][v]
             else:
                 data['Gross margin %'][v] = 0.0
@@ -173,6 +176,7 @@ def extract_pl_dashboard(
         # Calculate Net Income
         for v in all_verticals:
             data['Net income'][v] = data['Gross margin'][v] + data['Indirect Income'][v]
+            data['Net allocable income'][v] = data['Net income'][v]
             
         # Calculate Indirect Expense total (6. Indirect Expense row)
         for v in all_verticals:
@@ -239,7 +243,7 @@ def extract_pl_dashboard(
         # Profit / Loss before tax
         for v in all_verticals:
             data['Profit/ (loss) before tax'][v] = data['Gross margin'][v] + data['Indirect Income'][v] - data['Total indirect costs'][v]
-            if data['Sales'][v] != 0:
+            if abs(data['Sales'][v]) > 0.01:
                 data['Net margin %'][v] = data['Profit/ (loss) before tax'][v] / data['Sales'][v]
             else:
                 data['Net margin %'][v] = 0.0
