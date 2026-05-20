@@ -17,7 +17,8 @@ An enterprise-grade **React + FastAPI** web dashboard that automates the monthly
 | ⚠️ **YTD Data Not Available State** | When no YTD data and no prior workbook is provided, the YTD tab displays a premium glassmorphic warning card with actionable resolution steps |
 | 🏗️ **Formula-Intact Excel Compiler** | Clones `MIS_template.xlsx`, injects ledger data into the `List of Ledgers` sheet, and preserves all VLOOKUP / SUMIF formulas in dependent P&L sheets |
 | 📈 **Live Interactive Dashboard** | Multi-vertical P&L breakdown with Recharts area charts, 4 KPI cards (Revenue, Gross Margin %, Profit before Tax, Indirect Costs), and a full Statement of P&L table |
-| 🛡️ **Comprehensive Error Handling** | Client-side file validation, 120s timeout guard, typed error categorisation (network / validation / parse / server), dismissable error banners with hints, and a backend-offline detector |
+| 🛡️ **Comprehensive Error Handling** | Client-side file validation, SSE stream recovery, typed error categorisation (network / validation / parse / server), and dismissable error banners with hints |
+| 📡 **Real-time SSE Progress** | Server-Sent Events (SSE) stream provides real-time UI updates during heavy processing (Parsing → YTD Roll-forward → Excel Generation → Dashboard Extraction) |
 
 ---
 
@@ -37,18 +38,18 @@ The closing balance of each ledger in Tally is the single source of truth used t
 
 ---
 
-### 2. Ledger Classification — The Mapping Table
+### 2. The Core Engine: The Master Ledger Database & Catching Orphans
 
-Not all ledger names in Tally mean anything on their own. A ledger like *"HDFC Bank - CC"* needs to be classified before it can appear in a P&L. Every ledger in the system is tagged with four attributes:
+The app utilizes a "Source of Truth" mapping system. Every single penny must be accounted for before figures are dumped into the final report. Not all ledger names in Tally mean anything on their own (e.g. *"HDFC Bank - CC"* needs to be classified).
 
-| Attribute | Purpose | Examples |
-|---|---|---|
-| **Group** | Is it a P&L item or a Balance Sheet item? | `P&L`, `BS` |
-| **Head** | Which P&L line does it fall under? | `1. Sales Accounts`, `5. Purchase Accounts`, `3. Direct Expense`, `6. Indirect Expense`, `2. Indirect Income` |
-| **Classification** | Sub-category within Indirect Expenses or Indirect Income | `Salary & wages`, `Rent expenses`, `Interest Income`, `Foreign Exchange Gain` |
-| **Business Vertical** | Which vertical generated this income/expense? | `Bluestreak`, `Clarus`, `IT`, `Spices - A to Z`, `Spices - Vashi`, `Share Trading`, `Factory`, `Office`, `Common` |
+Your database mapping table assigns every ledger to:
+- **Tally Parent Group** (e.g., P&L, BS)
+- **App Target Head** (e.g., `1. Sales Accounts`, `5. Purchase Accounts`)
+- **Classification** (e.g., `Salary & wages`, `Rent expenses`)
+- **Business Vertical** (e.g., `Bluestreak`, `Clarus`, `IT`)
 
-This mapping is stored permanently in the **`List of Ledgers`** sheet inside `MIS_template.xlsx`. When a new ledger appears in Tally that has never been seen before (e.g. a new bank account, a new expense head), the pipeline pauses and asks the user to classify it before continuing.
+**The "Unmapped" Trap (Catching Orphans):**
+When a user uploads a new Trial Balance, the pipeline compares every ledger name in the TB against the Master Ledger Database. If an orphan ledger is detected (a new ledger created during the month), the pipeline completely halts execution. The user is presented with a mapping UI to strictly classify these new ledgers before any mathematical compilation occurs.
 
 > **Custom entries:** If a classification or vertical doesn't exist in the master list yet, the user can type a new one directly in the mapping screen — it gets saved permanently for all future months.
 
@@ -149,15 +150,16 @@ graph TD
     A[Tally Trial Balance Excel] -->|Upload| B(FastAPI Backend)
     B -->|Validate & Save| V[File Validation Layer]
     V -->|Parse Tally Sheets| C[tb_parser.py]
-    C -->|Check Mapping Table| D[ledger_mapper.py]
-    D -->|Unmapped Ledgers Found| E[React Mapping UI]
+    C -->|Check Master DB| D[ledger_mapper.py]
+    D -->|Orphans Found| E[React Mapping UI]
     E -->|Submit Mappings| B
-    B -->|YTD Check & Roll-Forward| F[ytd_calculator.py]
+    B -->|Initiate SSE Stream| S[SSE Progress API]
+    B -->|Background Task| F[ytd_calculator.py]
     F -->|Prior Month Workbook| G[(workbooks/)]
-    B -->|Clone Template & Fill| H[workbook_builder.py]
+    F -->|Clone Template & Fill| H[workbook_builder.py]
     H -->|openpyxl| I[MIS_template.xlsx]
-    B -->|Compute Financial Metrics| J[pl_extractor.py]
-    J -->|JSON pl_data| K[React Dashboard + Recharts]
+    H -->|Compute Financial Metrics| J[pl_extractor.py]
+    J -->|JSON pl_data via SSE| K[React Dashboard + Recharts]
     H -->|Output| L[Generated MIS Report .xlsx]
 ```
 
