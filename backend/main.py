@@ -1,8 +1,9 @@
 import os
 import uuid
 import json
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+import asyncio
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, BackgroundTasks
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Optional
 import shutil
@@ -45,6 +46,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 # In-memory session store for mapping state
 SESSIONS: Dict[str, Dict] = {}
+PROGRESS_STATES: Dict[str, Dict] = {}
 
 UPLOAD_DIR = "uploads"
 OUTPUT_DIR = "workbooks"
@@ -245,6 +247,7 @@ async def upload_ledgers_direct(ledger_file: UploadFile = File(...)):
 
 @app.post("/api/upload")
 async def upload_files(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     prior_file: Optional[UploadFile] = File(None),
     month: int = Form(3),
@@ -322,11 +325,18 @@ async def upload_files(
         }
 
     # 6. If NO unmapped ledgers, compile workbook immediately!
-    return await _process_and_finalize_workbook(session_id)
+    PROGRESS_STATES[session_id] = {"status": "processing", "step": "PARSING_TB", "result": None, "error": None}
+    background_tasks.add_task(_process_and_finalize_workbook, session_id)
+    return {
+        "success": True,
+        "session_id": session_id,
+        "status": "processing"
+    }
 
 
 @app.post("/api/map")
 async def submit_mappings(
+    background_tasks: BackgroundTasks,
     session_id: str = Form(...),
     mappings_data: str = Form(...)  # JSON string representing List[LedgerMapping]
 ):
@@ -344,89 +354,133 @@ async def submit_mappings(
     append_new_mappings_to_template(new_mappings)
 
     # Re-evaluate session with new mappings applied
-    return await _process_and_finalize_workbook(session_id)
-
-
-async def _process_and_finalize_workbook(session_id: str):
-    session = SESSIONS[session_id]
-    active_path = session["active_file_path"]
-    prior_path = session["prior_file_path"]
-    entries = session["parsed_entries"]
-    month = session["month"]
-    year = session["year"]
-
-    # 1. Roll-forward YTD balances if necessary
-    has_ytd = check_if_tb_has_ytd(entries)
-    try:
-        if not has_ytd:
-            entries = roll_forward_ytd(entries, prior_path)
-        else:
-            for entry in entries:
-                if entry.opening_ytd is None:
-                    entry.opening_ytd = entry.opening_net if entry.opening_net is not None else (entry.opening or 0.0)
-                if entry.debit_ytd is None:
-                    entry.debit_ytd = entry.debit_net if entry.debit_net is not None else (entry.debit or 0.0)
-                if entry.credit_ytd is None:
-                    entry.credit_ytd = entry.credit_net if entry.credit_net is not None else (entry.credit or 0.0)
-                if entry.closing_ytd is None:
-                    entry.closing_ytd = entry.closing_net if entry.closing_net is not None else (entry.closing or 0.0)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"YTD roll-forward calculation failed. Ensure the prior month workbook has a valid 'List of Ledgers' sheet. Details: {str(e)}"
-        )
-
-    # 2. Compile output workbook
-    output_filename = f"MIS_Report_{year}_{month:02d}.xlsx"
-    output_path = os.path.join(OUTPUT_DIR, output_filename)
-    try:
-        generate_monthly_workbook(
-            parsed_entries=entries,
-            uploaded_file_path=active_path,
-            output_path=output_path,
-            month=month,
-            year=year,
-            closing_stock=session.get("closing_stock", 0.0)
-        )
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=500,
-            detail="MIS template file not found. Please ensure 'templates/MIS_template.xlsx' exists in the server directory."
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Excel workbook generation failed: {str(e)}"
-        )
-
-    # Save the output file path in the session for downloading
-    session["output_path"] = output_path
-
-    # 3. Extract calculated P&L data dynamically
-    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    month_label = f"{month_names[month-1]}'{str(year)[-2:]}"
-    ytd_label = f"YTD'{str(year)[-2:]}"
-
-    try:
-        pl_data = extract_pl_dashboard(
-            entries,
-            month_label,
-            ytd_label,
-            has_ytd=(has_ytd or prior_path is not None),
-            closing_stock=session.get("closing_stock", 0.0)
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Dashboard P&L computation failed. Check that all ledger mappings are correctly classified. Details: {str(e)}"
-        )
-
+    PROGRESS_STATES[session_id] = {"status": "processing", "step": "ROLL_FORWARD_YTD", "result": None, "error": None}
+    background_tasks.add_task(_process_and_finalize_workbook, session_id)
     return {
         "success": True,
         "session_id": session_id,
-        "output_file": output_filename,
-        "pl_data": pl_data
+        "status": "processing"
     }
+
+
+async def _process_and_finalize_workbook(session_id: str):
+    try:
+        session = SESSIONS[session_id]
+        active_path = session["active_file_path"]
+        prior_path = session["prior_file_path"]
+        entries = session["parsed_entries"]
+        month = session["month"]
+        year = session["year"]
+
+        PROGRESS_STATES[session_id]["step"] = "ROLL_FORWARD_YTD"
+        await asyncio.sleep(0.5)
+
+        # 1. Roll-forward YTD balances if necessary
+        has_ytd = check_if_tb_has_ytd(entries)
+        try:
+            if not has_ytd:
+                entries = await asyncio.to_thread(roll_forward_ytd, entries, prior_path)
+            else:
+                for entry in entries:
+                    if entry.opening_ytd is None:
+                        entry.opening_ytd = entry.opening_net if entry.opening_net is not None else (entry.opening or 0.0)
+                    if entry.debit_ytd is None:
+                        entry.debit_ytd = entry.debit_net if entry.debit_net is not None else (entry.debit or 0.0)
+                    if entry.credit_ytd is None:
+                        entry.credit_ytd = entry.credit_net if entry.credit_net is not None else (entry.credit or 0.0)
+                    if entry.closing_ytd is None:
+                        entry.closing_ytd = entry.closing_net if entry.closing_net is not None else (entry.closing or 0.0)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"YTD roll-forward calculation failed. Ensure the prior month workbook has a valid 'List of Ledgers' sheet. Details: {str(e)}"
+            )
+
+        PROGRESS_STATES[session_id]["step"] = "GENERATING_EXCEL"
+        await asyncio.sleep(0.5)
+
+        # 2. Compile output workbook
+        output_filename = f"MIS_Report_{year}_{month:02d}.xlsx"
+        output_path = os.path.join(OUTPUT_DIR, output_filename)
+        try:
+            await asyncio.to_thread(
+                generate_monthly_workbook,
+                entries,
+                active_path,
+                output_path,
+                month,
+                year,
+                session.get("closing_stock", 0.0)
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=500,
+                detail="MIS template file not found. Please ensure 'templates/MIS_template.xlsx' exists in the server directory."
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Excel workbook generation failed: {str(e)}"
+            )
+
+        # Save the output file path in the session for downloading
+        session["output_path"] = output_path
+
+        PROGRESS_STATES[session_id]["step"] = "EXTRACTING_DASHBOARD"
+        await asyncio.sleep(0.5)
+
+        # 3. Extract calculated P&L data dynamically
+        month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        month_label = f"{month_names[month-1]}'{str(year)[-2:]}"
+        ytd_label = f"YTD'{str(year)[-2:]}"
+
+        try:
+            pl_data = await asyncio.to_thread(
+                extract_pl_dashboard,
+                entries,
+                month_label,
+                ytd_label,
+                (has_ytd or prior_path is not None),
+                session.get("closing_stock", 0.0)
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Dashboard P&L computation failed. Check that all ledger mappings are correctly classified. Details: {str(e)}"
+            )
+
+        PROGRESS_STATES[session_id]["result"] = {
+            "success": True,
+            "session_id": session_id,
+            "output_file": output_filename,
+            "pl_data": pl_data.model_dump() if hasattr(pl_data, "model_dump") else pl_data.dict()
+        }
+        PROGRESS_STATES[session_id]["status"] = "completed"
+
+    except HTTPException as he:
+        PROGRESS_STATES[session_id]["status"] = "error"
+        PROGRESS_STATES[session_id]["error"] = he.detail
+    except Exception as e:
+        PROGRESS_STATES[session_id]["status"] = "error"
+        PROGRESS_STATES[session_id]["error"] = f"An unexpected error occurred: {str(e)}"
+
+@app.get("/api/status/{session_id}")
+async def stream_status(session_id: str):
+    async def event_generator():
+        while True:
+            if session_id not in PROGRESS_STATES:
+                yield f"data: {json.dumps({'status': 'not_found'})}\n\n"
+                break
+            state = PROGRESS_STATES[session_id]
+            yield f"data: {json.dumps(state)}\n\n"
+            if state["status"] in ["completed", "error"]:
+                # Keep the connection open briefly so the frontend can receive the message
+                # and call eventSource.close() cleanly before the server terminates the TCP socket.
+                # This prevents spurious 'onerror' events in the browser.
+                await asyncio.sleep(2)
+                break
+            await asyncio.sleep(0.5)
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.get("/api/download")

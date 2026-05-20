@@ -7,6 +7,7 @@ import {
 import { 
   ResponsiveContainer, XAxis, YAxis, Tooltip, Legend, AreaChart, Area
 } from 'recharts';
+import { motion, AnimatePresence } from 'framer-motion';
 
 // Backend Server URL
 const API_BASE = "http://127.0.0.1:8000/api";
@@ -134,8 +135,36 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 9
 }
 
 export default function App() {
-  // App Workflow Stages: 'UPLOAD' | 'LEDGER_REVIEW' | 'MAPPING' | 'DASHBOARD'
-  const [stage, setStage] = useState<'UPLOAD' | 'LEDGER_REVIEW' | 'MAPPING' | 'DASHBOARD'>('UPLOAD');
+  // App Workflow Stages: 'UPLOAD' | 'LEDGER_REVIEW' | 'MAPPING' | 'PROCESSING' | 'DASHBOARD'
+  const [stage, setStage] = useState<'UPLOAD' | 'LEDGER_REVIEW' | 'MAPPING' | 'PROCESSING' | 'DASHBOARD'>('UPLOAD');
+  const [progressState, setProgressState] = useState<{status: string; step: string} | null>(null);
+
+  const listenToProgress = (currentSessionId: string) => {
+    setStage('PROCESSING');
+    setProgressState({status: 'processing', step: 'PARSING_TB'});
+    const eventSource = new EventSource(`${API_BASE}/status/${currentSessionId}`);
+    
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.status === 'completed') {
+        eventSource.close();
+        setPlData(data.result.pl_data);
+        setStage('DASHBOARD');
+      } else if (data.status === 'error') {
+        eventSource.close();
+        setAppError({ category: 'server', title: 'Processing Error', message: data.error });
+        setStage('UPLOAD');
+      } else {
+        setProgressState(data);
+      }
+    };
+    
+    eventSource.onerror = () => {
+      eventSource.close();
+      setAppError({ category: 'network', title: 'Connection Lost', message: 'Lost connection to progress stream.' });
+      setStage('UPLOAD');
+    };
+  };
   
   // Data States
   const [activeFile, setActiveFile] = useState<File | null>(null);
@@ -612,8 +641,7 @@ export default function App() {
         setMappings(initialMappings);
         setStage('MAPPING');
       } else {
-        setPlData(data.pl_data);
-        setStage('DASHBOARD');
+        listenToProgress(data.session_id);
       }
     } catch (err: unknown) {
       setAppError(await parseApiError(res, err));
@@ -689,8 +717,7 @@ export default function App() {
       }
 
       const data = await res.json();
-      setPlData(data.pl_data);
-      setStage('DASHBOARD');
+      listenToProgress(sessionId);
     } catch (err: unknown) {
       setAppError(await parseApiError(res, err));
     } finally {
@@ -866,14 +893,64 @@ export default function App() {
         </div>
       )}
 
+      {/* Processing Loader Panel (SSE) */}
+      {stage === 'PROCESSING' && progressState && (
+        <div className="loader-overlay">
+          <div className="glass-panel" style={{ width: '400px', padding: '2rem' }}>
+            <h3 className="loader-title" style={{ marginTop: 0, marginBottom: '1.5rem', textAlign: 'center' }}>
+              Building Dashboard
+            </h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {[
+                { id: 'PARSING_TB', label: 'Reading Trial Balance...' },
+                { id: 'ROLL_FORWARD_YTD', label: 'Calculating YTD Balances...' },
+                { id: 'GENERATING_EXCEL', label: 'Building MIS Workbook...' },
+                { id: 'EXTRACTING_DASHBOARD', label: 'Extracting P&L Insights...' }
+              ].map((step, index) => {
+                const steps = ['PARSING_TB', 'ROLL_FORWARD_YTD', 'GENERATING_EXCEL', 'EXTRACTING_DASHBOARD'];
+                const currentIndex = steps.indexOf(progressState.step);
+                const isCompleted = index < currentIndex;
+                const isActive = index === currentIndex;
+                const isPending = index > currentIndex;
+
+                return (
+                  <motion.div 
+                    key={step.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: isPending ? 0.4 : 1, y: 0 }}
+                    style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: '1rem',
+                      color: isActive ? 'white' : isCompleted ? 'var(--accent-emerald)' : 'var(--text-muted)',
+                      fontWeight: isActive ? 600 : 400
+                    }}
+                  >
+                    <div style={{
+                      width: '24px', height: '24px', borderRadius: '50%',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      background: isCompleted ? 'var(--accent-emerald)' : isActive ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255,255,255,0.05)',
+                      color: isCompleted ? 'white' : isActive ? 'var(--accent-emerald)' : 'var(--text-muted)'
+                    }}>
+                      {isCompleted ? <CheckCircle size={14} /> : isActive ? <div className="pulse-dot" style={{ width: '8px', height: '8px' }}></div> : <span style={{ fontSize: '10px' }}>{index + 1}</span>}
+                    </div>
+                    <span>{step.label}</span>
+                  </motion.div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Global Processing Loader Panel */}
-      {loading && (
+      {loading && stage !== 'PROCESSING' && (
         <div className="loader-overlay">
           <div className="spinner">
             <Layers className="spinner-icon" />
           </div>
           <h3 className="loader-title">{statusMessage}</h3>
-          <p className="loader-desc">Processing large Excel formulas and computing financials...</p>
+          <p className="loader-desc">Processing...</p>
         </div>
       )}
 
