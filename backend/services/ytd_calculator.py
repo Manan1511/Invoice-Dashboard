@@ -59,15 +59,26 @@ def roll_forward_ytd(
         
         group_val = str(prior_ws.cell(row=r_idx, column=4).value or "").strip().upper()
         
-        # If it's April (month 4) and this is a P&L account, reset prior YTD values to 0
-        if month == 4 and "P&L" in group_val:
-            prior_ytd_data[name_clean] = {
-                "opening_ytd": 0.0,
-                "debit_ytd": 0.0,
-                "credit_ytd": 0.0,
-                "closing_ytd": 0.0
-            }
+        # If it's April (month 4), reset appropriately based on Group
+        if month == 4:
+            if "P&L" in group_val:
+                # P&L accounts wipe completely clean
+                prior_ytd_data[name_clean] = {
+                    "opening_ytd": 0.0,
+                    "debit_ytd": 0.0,
+                    "credit_ytd": 0.0,
+                    "closing_ytd": 0.0
+                }
+            else:
+                # Balance Sheet accounts carry forward the CLOSING balance as the new OPENING balance, but reset movements
+                prior_ytd_data[name_clean] = {
+                    "opening_ytd": _to_float(clos_ytd),
+                    "debit_ytd": 0.0,
+                    "credit_ytd": 0.0,
+                    "closing_ytd": _to_float(clos_ytd)
+                }
         else:
+            # Standard mid-year roll forward
             prior_ytd_data[name_clean] = {
                 "opening_ytd": _to_float(op_ytd),
                 "debit_ytd": _to_float(deb_ytd),

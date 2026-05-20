@@ -70,10 +70,10 @@ def extract_pl_dashboard(
         val_ytd = entry.closing_ytd if entry.closing_ytd is not None else 0.0
         
         # Ensure Sales and Incomes are strictly positive for dashboard metrics and charts.
-        # This prevents flat 0 graphs if Tally exports credit balances as negative numbers.
+        # But use negative multiplication instead of abs() so that Sales Returns (Debits) properly reduce revenue.
         if mapping.head in {"1. Sales Accounts", "2. Indirect Income"}:
-            val_month = abs(val_month)
-            val_ytd = abs(val_ytd)
+            val_month = -val_month
+            val_ytd = -val_ytd
             
         if mapping.head == "1. Sales Accounts":
             m_sales, y_sales = get_or_create_line('Sales')
