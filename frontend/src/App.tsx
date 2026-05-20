@@ -381,7 +381,6 @@ export default function App() {
 
   // Fetch domain dropdown options on load; also acts as a backend connectivity check
   useEffect(() => {
-    setBackendOnline(null);
     fetch(`${API_BASE}/domain-lists`)
       .then(res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -394,6 +393,17 @@ export default function App() {
       .catch(() => {
         setBackendOnline(false);
       });
+  }, []);
+
+  // Listen for Escape key to close error modal pop-up
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setAppError(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   // Handle Ledger File Upload → parse and enter LEDGER_REVIEW stage
@@ -784,38 +794,55 @@ export default function App() {
         </div>
       )}
 
-      {/* Error Banner */}
+      {/* Error Modal Pop-up Overlay */}
       {appError && (
-        <div className="error-banner" style={{ flexDirection: 'column', gap: '0.6rem', alignItems: 'flex-start' }}>
-          <div style={{ display: 'flex', width: '100%', alignItems: 'flex-start', gap: '0.75rem' }}>
-            <AlertTriangle className="error-icon" size={20} style={{ color: appError.category === 'network' ? '#f59e0b' : 'var(--accent-red)', flexShrink: 0, marginTop: '2px' }} />
-            <div style={{ flex: 1 }}>
-              <h4 className="error-title">{appError.title}</h4>
-              <p className="error-desc">{appError.message}</p>
-              {appError.hint && (
-                <p style={{ margin: '0.4rem 0 0 0', fontSize: '0.78rem', color: 'var(--accent-teal)', fontFamily: 'monospace', background: 'rgba(0,0,0,0.2)', padding: '0.3rem 0.6rem', borderRadius: '6px', display: 'inline-block' }}>
-                  💡 {appError.hint}
-                </p>
-              )}
+        <div className="error-modal-overlay">
+          <div className="error-modal-card animate-slideDown" style={{ 
+            borderColor: appError.category === 'network' ? 'var(--accent-gold)' : 'var(--accent-red)' 
+          }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1.25rem' }}>
+              <div className="error-modal-icon-wrapper" style={{
+                background: appError.category === 'network' ? 'rgba(245, 158, 11, 0.1)' : 'rgba(244, 63, 94, 0.1)',
+                color: appError.category === 'network' ? 'var(--accent-gold)' : 'var(--accent-red)'
+              }}>
+                <AlertTriangle size={24} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <h3 className="error-modal-title" style={{
+                  color: appError.category === 'network' ? '#fde047' : '#fda4af'
+                }}>
+                  {appError.title}
+                </h3>
+                <p className="error-modal-desc">{appError.message}</p>
+                
+                {appError.hint && (
+                  <div className="error-modal-hint-box">
+                    <span className="error-modal-hint-bulb">💡</span>
+                    <code className="error-modal-hint-code">{appError.hint}</code>
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => setAppError(null)}
+                className="error-modal-close-btn"
+                title="Dismiss"
+              >
+                <X size={20} />
+              </button>
             </div>
-            <button
-              onClick={() => setAppError(null)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '2px', borderRadius: '4px', flexShrink: 0 }}
-              title="Dismiss"
-            >
-              <X size={16} />
-            </button>
-          </div>
 
-          {/* Retry action for network errors */}
-          {appError.category === 'network' && (
-            <button
-              onClick={() => { setAppError(null); setStage('UPLOAD'); }}
-              style={{ marginLeft: '2rem', padding: '0.3rem 0.8rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', cursor: 'pointer', color: 'white', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-            >
-              <RefreshCw size={12} /> Retry Upload
-            </button>
-          )}
+            {/* Footer Action Bar if network error */}
+            {appError.category === 'network' && (
+              <div className="error-modal-footer">
+                <button
+                  onClick={() => { setAppError(null); setStage('UPLOAD'); }}
+                  className="error-modal-retry-btn"
+                >
+                  <RefreshCw size={14} /> Retry Upload
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
