@@ -211,9 +211,10 @@ def replace_ledger_list_in_template(new_mappings: List[LedgerMapping]) -> None:
     # Determine the data start row (first row after headers)
     DATA_START_ROW = 5  # rows 1-4 are title/header rows in the template
 
-    # Clear existing data rows (columns 1-8 only — preserves any side-panel content)
-    for r_idx in range(DATA_START_ROW, ws.max_row + 1):
-        for c_idx in range(1, 9):
+    # Clear existing data rows (columns 1-17 completely) down to ws.max_row
+    max_row = max(ws.max_row, DATA_START_ROW)
+    for r_idx in range(DATA_START_ROW, max_row + 1):
+        for c_idx in range(1, 18):  # Columns 1 through 17 (A to Q)
             ws.cell(row=r_idx, column=c_idx).value = None
 
     # Write new mappings

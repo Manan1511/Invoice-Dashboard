@@ -64,18 +64,11 @@ def extract_pl_dashboard(
     # Clean and normalize vertical names (standard cost centers normalized to title case)
     for m in mappings.values():
         if m.vertical:
-            v_clean = m.vertical.strip()
-            v_lower = v_clean.lower()
-            if v_lower == 'common':
-                m.vertical = 'Common'
-            elif v_lower == 'factory':
-                m.vertical = 'Factory'
-            elif v_lower == 'office':
-                m.vertical = 'Office'
-            else:
-                m.vertical = v_clean
+            m.vertical = m.vertical.strip().title()
+        else:
+            m.vertical = "Common"
 
-    all_verticals = {m.vertical for m in mappings.values() if m.vertical}
+    all_verticals = {m.vertical.strip().title() for m in mappings.values() if m.vertical}
     if not all_verticals:
         all_verticals = {"Common"}
 
@@ -83,16 +76,16 @@ def extract_pl_dashboard(
     revenue_centers = set()
     for m in mappings.values():
         if m.head == "1. Sales Accounts" and m.vertical:
-            revenue_centers.add(m.vertical)
+            revenue_centers.add(m.vertical.strip().title())
 
     # Protect standard shared cost centers from being classified as revenue centers
-    revenue_centers = {rc for rc in revenue_centers if rc.lower() not in {"factory", "office", "common"}}
+    revenue_centers = {rc.strip().title() for rc in revenue_centers if rc.strip().title().lower() not in {"factory", "office", "common"}}
 
-    cost_centers = all_verticals - revenue_centers
+    cost_centers = {cc.strip().title() for cc in (all_verticals - revenue_centers)}
 
     # Sort centers alphabetically for deterministic layout
-    sorted_revenue_centers = sorted(list(revenue_centers))
-    sorted_cost_centers = sorted(list(cost_centers))
+    sorted_revenue_centers = sorted(list({rc.strip().title() for rc in revenue_centers}))
+    sorted_cost_centers = sorted(list({cc.strip().title() for cc in cost_centers}))
 
     # Dynamic Column Structure
     has_share_trading = 'Share Trading' in all_verticals
@@ -168,7 +161,7 @@ def extract_pl_dashboard(
         if not entry:
             continue
 
-        v = mapping.vertical.strip() if mapping.vertical else 'Common'
+        v = mapping.vertical.strip().title() if mapping.vertical else 'Common'
         if v not in all_cols:
             v = 'Common'
 
@@ -236,7 +229,7 @@ def extract_pl_dashboard(
             if mapping.classification == 'Opening Stock' or mapping.head == 'Stock-in-hand':
                 entry = entries_map.get(ledger_name)
                 if entry:
-                    v = mapping.vertical.strip() if mapping.vertical else 'Common'
+                    v = mapping.vertical.strip().title() if mapping.vertical else 'Common'
                     if v not in all_cols:
                         v = 'Common'
                     total_op_stock[v] += _to_dec(entry.opening if not is_ytd else (entry.opening_ytd or Decimal('0.00')))
@@ -299,10 +292,9 @@ def extract_pl_dashboard(
                 data[cat]['Total'] = sum(data[cat][v] for v in sorted_revenue_centers + sorted_cost_centers)
 
         # 4. Proportional Cost Allocation Engine
-        # Safely compute the revenue pool using absolute values of the raw Sales Accounts 
-        # This prevents negative Credit signs from breaking the math
+        # Safely compute the revenue pool using floored individual vertical revenues
         revenue_verticals = [rc for rc in sorted_revenue_centers]
-        total_revenue_pool = sum(abs(data['1. Sales Accounts'][rc]) for rc in revenue_verticals)
+        total_revenue_pool = sum(max(Decimal('0.00'), data['1. Sales Accounts'][rc]) for rc in revenue_verticals)
 
         for cc in sorted_cost_centers:
             # Shared cost pool for cost center cc
@@ -310,11 +302,15 @@ def extract_pl_dashboard(
             alloc_row_name = get_alloc_row_key(cc)
 
             for rc in sorted_revenue_centers:
+                # Allocation Pool Safety Gate: Fallback to even split if pool drops to or below Decimal('0.00')
                 if total_revenue_pool > Decimal('0.00'):
-                    sales_rc = abs(data['1. Sales Accounts'][rc])
-                    data[alloc_row_name][rc] = total_cc_expense * (sales_rc / total_revenue_pool)
+                    sales_rc = data['1. Sales Accounts'][rc]
+                    # Floor individual vertical revenue at zero for ratio distribution
+                    # to prevent negative allocation scalars
+                    effective_sales = max(Decimal('0.00'), sales_rc)
+                    data[alloc_row_name][rc] = total_cc_expense * (effective_sales / total_revenue_pool)
                 else:
-                    # Fallback to even split if revenue is exactly zero
+                    # Fallback to even split if revenue is exactly zero or negative
                     data[alloc_row_name][rc] = total_cc_expense * (Decimal('1.0') / (Decimal(str(len(revenue_verticals))) or Decimal('1.0')))
 
             # Clear cost center's own allocated column by negating the pool
@@ -368,7 +364,7 @@ def extract_pl_dashboard(
         if not (is_debtor or is_creditor):
             continue
 
-        v = mapping.vertical.strip() if mapping.vertical else 'Common'
+        v = mapping.vertical.strip().title() if mapping.vertical else 'Common'
         if v not in all_cols:
             v = 'Common'
 
