@@ -7,7 +7,7 @@ import {
 import { 
   ResponsiveContainer, XAxis, YAxis, Tooltip, Legend, BarChart, Bar, ReferenceLine
 } from 'recharts';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 
 // Backend Server URL
 const API_BASE = "http://127.0.0.1:8000/api";
@@ -734,7 +734,7 @@ export default function App() {
         return;
       }
 
-      const data = await res.json();
+      await res.json();
       listenToProgress(sessionId);
     } catch (err: unknown) {
       setAppError(await parseApiError(res, err));
@@ -1528,7 +1528,7 @@ export default function App() {
                       {formatCurrency(activeTab === 'MONTH' ? plData.kpis.monthly_revenue : plData.kpis.ytd_revenue)}
                     </h3>
                     <span className="kpi-footer emerald">
-                      <TrendingUp size={14} /> Operational sales
+                      <TrendingUp size={14} /> {activeTab === 'MONTH' ? 'Net monthly sales' : 'Cumulative YTD sales'}
                     </span>
                   </div>
                   <div className="kpi-icon-wrapper emerald">
@@ -1543,7 +1543,7 @@ export default function App() {
                       {((activeTab === 'MONTH' ? plData.kpis.monthly_gross_margin_pct : plData.kpis.ytd_gross_margin_pct) * 100).toFixed(1)}%
                     </h3>
                     <span className="kpi-footer teal">
-                      <TrendingUp size={14} /> High performance
+                      <TrendingUp size={14} /> {activeTab === 'MONTH' ? 'Monthly margin rate' : 'YTD margin rate'}
                     </span>
                   </div>
                   <div className="kpi-icon-wrapper teal">
@@ -1557,7 +1557,9 @@ export default function App() {
                     <h3 className="kpi-val" style={{ color: (activeTab === 'MONTH' ? plData.kpis.monthly_net_income : plData.kpis.ytd_net_income) >= 0 ? 'var(--accent-emerald)' : 'var(--accent-red)' }}>
                       {formatCurrency(activeTab === 'MONTH' ? plData.kpis.monthly_net_income : plData.kpis.ytd_net_income)}
                     </h3>
-                    <span className="kpi-footer muted">Net monthly margin</span>
+                    <span className="kpi-footer muted">
+                      {activeTab === 'MONTH' ? 'Net monthly profit' : 'Net YTD profit'}
+                    </span>
                   </div>
                   <div className="kpi-icon-wrapper indigo">
                     <BarChart2 size={24} />
@@ -1597,8 +1599,8 @@ export default function App() {
                         contentStyle={{ backgroundColor: '#0b1329', borderColor: 'rgba(255,255,255,0.08)', borderRadius: '12px' }}
                         labelStyle={{ color: '#fff', fontWeight: 'bold' }}
                         itemStyle={{ color: '#ccc' }}
-                        formatter={(value: number, name: string) => [
-                          `₹${(value / 100000).toFixed(2)}L`,
+                        formatter={(value: any, name: any) => [
+                          `₹${(Number(value) / 100000).toFixed(2)}L`,
                           name
                         ]}
                       />
