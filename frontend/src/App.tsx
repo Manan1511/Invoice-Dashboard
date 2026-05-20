@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Upload, FileText, ChevronRight, Download, RefreshCw, BarChart2, 
   PieChart, CheckCircle, AlertTriangle, ArrowUpRight, DollarSign, 
-  TrendingUp, Layers, HelpCircle, X, WifiOff, Edit2, Plus, Trash2, BookOpen
+  TrendingUp, TrendingDown, Layers, HelpCircle, X, WifiOff, Edit2, Plus, Trash2, BookOpen
 } from 'lucide-react';
 import { 
   ResponsiveContainer, XAxis, YAxis, Tooltip, Legend, BarChart, Bar, ReferenceLine
@@ -24,6 +24,23 @@ interface PLBreakdown {
   rows: PLRow[];
 }
 
+interface DebtorCreditorPivotEntry {
+  vertical: string;
+  opening: number;
+  debit: number;
+  credit: number;
+  closing: number;
+  opening_ytd: number;
+  debit_ytd: number;
+  credit_ytd: number;
+  closing_ytd: number;
+}
+
+interface DebtorCreditorPivot {
+  debtors: DebtorCreditorPivotEntry[];
+  creditors: DebtorCreditorPivotEntry[];
+}
+
 interface PLDataResponse {
   month_label: string;
   ytd_label: string;
@@ -31,6 +48,7 @@ interface PLDataResponse {
   ytd_data: PLBreakdown;
   kpis: Record<string, number>;
   has_ytd?: boolean;
+  debtors_creditors_pivot?: DebtorCreditorPivot;
 }
 
 interface DomainLists {
@@ -1662,6 +1680,112 @@ export default function App() {
                   </table>
                 </div>
               </div>
+
+              {/* Dynamic Debtors & Creditors Pivot Table */}
+              {plData.debtors_creditors_pivot && (
+                <div className="glass-panel statement-card animate-fadeIn" style={{ marginTop: '2rem' }}>
+                  <div className="statement-header">
+                    <h3 className="statement-title">Sundry Debtors &amp; Creditors Pivot</h3>
+                    <p className="statement-subtitle">Automated vertical-wise breakdown of accounts receivable and payable</p>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '2rem', marginTop: '1.5rem' }}>
+                    {/* Debtors Summary */}
+                    <div>
+                      <h4 style={{ color: 'var(--accent-emerald)', fontSize: '1rem', fontWeight: '600', margin: '0 0 0.75rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem', textAlign: 'left' }}>
+                        <TrendingUp size={16} /> Sundry Debtors
+                      </h4>
+                      <div className="statement-table-wrapper">
+                        <table className="statement-table">
+                          <thead>
+                            <tr>
+                              <th className="particulars-col">Business Vertical</th>
+                              <th>Opening</th>
+                              <th>Debit</th>
+                              <th>Credit</th>
+                              <th>Closing</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {plData.debtors_creditors_pivot.debtors.length === 0 ? (
+                              <tr>
+                                <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No Sundry Debtor balances found</td>
+                              </tr>
+                            ) : (
+                              <>
+                                {plData.debtors_creditors_pivot.debtors.map((row) => (
+                                  <tr key={row.vertical}>
+                                    <td className="particulars-col" style={{ fontWeight: '500' }}>{row.vertical}</td>
+                                    <td>{formatCurrency(activeTab === 'MONTH' ? row.opening : row.opening_ytd)}</td>
+                                    <td style={{ color: 'var(--accent-emerald)' }}>{formatCurrency(activeTab === 'MONTH' ? row.debit : row.debit_ytd)}</td>
+                                    <td style={{ color: 'var(--accent-red)' }}>{formatCurrency(activeTab === 'MONTH' ? row.credit : row.credit_ytd)}</td>
+                                    <td style={{ fontWeight: '600' }}>{formatCurrency(activeTab === 'MONTH' ? row.closing : row.closing_ytd)}</td>
+                                  </tr>
+                                ))}
+                                {/* Grand Total for Debtors */}
+                                <tr className="row-total">
+                                  <td className="particulars-col">Grand Total</td>
+                                  <td>{formatCurrency(plData.debtors_creditors_pivot.debtors.reduce((sum, r) => sum + (activeTab === 'MONTH' ? r.opening : r.opening_ytd), 0))}</td>
+                                  <td style={{ color: 'var(--accent-emerald)' }}>{formatCurrency(plData.debtors_creditors_pivot.debtors.reduce((sum, r) => sum + (activeTab === 'MONTH' ? r.debit : r.debit_ytd), 0))}</td>
+                                  <td style={{ color: 'var(--accent-red)' }}>{formatCurrency(plData.debtors_creditors_pivot.debtors.reduce((sum, r) => sum + (activeTab === 'MONTH' ? r.credit : r.credit_ytd), 0))}</td>
+                                  <td style={{ fontWeight: '600' }}>{formatCurrency(plData.debtors_creditors_pivot.debtors.reduce((sum, r) => sum + (activeTab === 'MONTH' ? r.closing : r.closing_ytd), 0))}</td>
+                                </tr>
+                              </>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Creditors Summary */}
+                    <div>
+                      <h4 style={{ color: 'var(--accent-red)', fontSize: '1rem', fontWeight: '600', margin: '0 0 0.75rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem', textAlign: 'left' }}>
+                        <TrendingDown size={16} /> Sundry Creditors
+                      </h4>
+                      <div className="statement-table-wrapper">
+                        <table className="statement-table">
+                          <thead>
+                            <tr>
+                              <th className="particulars-col">Business Vertical</th>
+                              <th>Opening</th>
+                              <th>Debit</th>
+                              <th>Credit</th>
+                              <th>Closing</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {plData.debtors_creditors_pivot.creditors.length === 0 ? (
+                              <tr>
+                                <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No Sundry Creditor balances found</td>
+                              </tr>
+                            ) : (
+                              <>
+                                {plData.debtors_creditors_pivot.creditors.map((row) => (
+                                  <tr key={row.vertical}>
+                                    <td className="particulars-col" style={{ fontWeight: '500' }}>{row.vertical}</td>
+                                    <td>{formatCurrency(activeTab === 'MONTH' ? row.opening : row.opening_ytd)}</td>
+                                    <td style={{ color: 'var(--accent-emerald)' }}>{formatCurrency(activeTab === 'MONTH' ? row.debit : row.debit_ytd)}</td>
+                                    <td style={{ color: 'var(--accent-red)' }}>{formatCurrency(activeTab === 'MONTH' ? row.credit : row.credit_ytd)}</td>
+                                    <td style={{ fontWeight: '600' }}>{formatCurrency(activeTab === 'MONTH' ? row.closing : row.closing_ytd)}</td>
+                                  </tr>
+                                ))}
+                                {/* Grand Total for Creditors */}
+                                <tr className="row-total">
+                                  <td className="particulars-col">Grand Total</td>
+                                  <td>{formatCurrency(plData.debtors_creditors_pivot.creditors.reduce((sum, r) => sum + (activeTab === 'MONTH' ? r.opening : r.opening_ytd), 0))}</td>
+                                  <td style={{ color: 'var(--accent-emerald)' }}>{formatCurrency(plData.debtors_creditors_pivot.creditors.reduce((sum, r) => sum + (activeTab === 'MONTH' ? r.debit : r.debit_ytd), 0))}</td>
+                                  <td style={{ color: 'var(--accent-red)' }}>{formatCurrency(plData.debtors_creditors_pivot.creditors.reduce((sum, r) => sum + (activeTab === 'MONTH' ? r.credit : r.credit_ytd), 0))}</td>
+                                  <td style={{ fontWeight: '600' }}>{formatCurrency(plData.debtors_creditors_pivot.creditors.reduce((sum, r) => sum + (activeTab === 'MONTH' ? r.closing : r.closing_ytd), 0))}</td>
+                                </tr>
+                              </>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>

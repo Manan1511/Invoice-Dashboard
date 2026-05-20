@@ -6,8 +6,19 @@ from services.ledger_mapper import load_mapped_ledgers
 
 from decimal import Decimal, ROUND_HALF_UP
 
+
+# Shared Constants
+ALLOCATION_ROW_KEY = "Common Allocation"
+
+def get_alloc_row_key(cc: str) -> str:
+    if cc == 'Common':
+        return ALLOCATION_ROW_KEY
+    return f"Allocation of {cc}"
+
 # Helper to convert to Decimal
-def _to_dec(val):
+def _to_dec(val) -> Decimal:
+    if val is None:
+        return Decimal('0.00')
     try:
         return Decimal(str(val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     except:
@@ -20,281 +31,444 @@ def extract_pl_dashboard(
     has_ytd: bool = True,
     closing_stock: float = 0.0
 ) -> PLDataResponse:
-    """Calculates and extracts the P&L breakdown dynamically in Python based on ledger mappings and balances."""
-    # 1. Load active mappings
-    mappings = load_mapped_ledgers()
-    
-    # Map entries by ledger name (lowercase)
-    entries_map: Dict[str, LedgerEntry] = {e.name.lower(): e for e in parsed_entries}
-    
-    # 2. Define Verticals and Columns
-    # Dynamically extract all unique verticals mapped by the user
-    mapped_verticals = set(m.vertical for m in mappings.values() if m.vertical and m.vertical != 'Share Trading')
-    
-    # Ensure core shared pools exist, then convert to list
-    operating_verticals = list(mapped_verticals.union({'Factory', 'Office', 'Common'}))
-    all_verticals = operating_verticals + ['Total (without share trading)', 'Share Trading', 'Total (including share trading)']
-    
-    # Initialize aggregated monthly and YTD data structures
-    # Structure: monthly_data[line_item][vertical] = value
-    monthly_data: Dict[str, Dict[str, Decimal]] = {}
-    ytd_data: Dict[str, Dict[str, Decimal]] = {}
-    
-    def get_or_create_line(item_name: str):
-        if item_name not in monthly_data:
-            monthly_data[item_name] = {v: Decimal('0.00') for v in all_verticals}
-            ytd_data[item_name] = {v: Decimal('0.00') for v in all_verticals}
-        return monthly_data[item_name], ytd_data[item_name]
+    """
+    Refactored dynamic and data-driven P&L extraction and cost allocation engine.
+    Calculates P&L breakdown and dynamic shared cost allocations based solely on mapping metadata.
+    """
+    # 1. Load and clean active mappings
+    raw_mappings = load_mapped_ledgers()
+    mappings: Dict[str, LedgerMapping] = {k.strip().lower(): v for k, v in raw_mappings.items()}
 
-    # Pre-populate empty lines for all P&L row categories
-    direct_expense_items = ['Port Expenses', 'Loading & Unloading charges', 'Freight & Shipping charges', 'Export charges', 'Insurance expenses']
-    indirect_income_items = ['Foreign Exchange Gain', 'Exhibtion Income', 'Commission', 'Dividend ', 'Interest Income', 'Short term Capital Gain ', 'Profit on sale of Investment ', 'Capital Loss']
-    indirect_expense_items = [
-        'Audit Fees', 'Accomodation expenses', 'Advertisement', 'Bad debt', 'Marketing Expense', 'Bank charges', 
-        'Brokerage and commission', 'Conveyance expenses', 'Courier charges', 'Donation', 'Domain Expenses', 
-        'Depreciation', 'Electricity charges', 'Fuel Expenses', 'Insurance', 'Interest expense', 'Labour charges', 
-        'Misc Expenses', 'Membership Expenses', 'Printing & Stationery', 'Professional charges', 'Rates & Taxes', 
-        'Rent expenses', 'Repairs & maintenance expenses', 'Salary & wages', 'Share trading expenses', 
-        'Staff welfare expenses', 'Subscription fees', 'Telephone & Internet charges', 'Transportation', 
-        'Travelling expenses', 'Packing Charges'
-    ]
-    
-    all_categories = ['Sales', 'Less: COGS', '3. Direct Expense'] + direct_expense_items + ['Gross margin', 'Gross margin %', 'Indirect Income'] + indirect_income_items + ['Net income', 'Net allocable income', '6. Indirect Expense'] + indirect_expense_items + ['Indirect costs', 'Factory', 'Office', 'Common', 'Total indirect costs', 'Profit/ (loss) before tax', 'Net margin %']
-    
-    for cat in all_categories:
-        get_or_create_line(cat)
+    # CRITICAL ERROR TRAP: Detect non-zero balance ledgers that are not mapped
+    for entry in parsed_entries:
+        name_lower = entry.name.lower().strip()
+        if name_lower in {"particulars", "grand total", "total", "grand", "net profit", "net loss"}:
+            continue
+
+        # Check if ledger has non-zero balance
+        has_balance = False
+        for val in [entry.closing, entry.closing_net, entry.closing_ytd, entry.opening, entry.opening_net, entry.opening_ytd]:
+            if val is not None and abs(val) > 0.001:
+                has_balance = True
+                break
+
+        if has_balance and name_lower not in mappings:
+            raise ValueError(
+                f"CRITICAL ERROR: Ledger '{entry.name}' has a non-zero balance in the Trial Balance "
+                f"but is NOT mapped in your List of Ledgers mapping file! Please map this ledger first."
+            )
+
+    # 2. Extract Business Verticals dynamically
+    # Clean and normalize vertical names (standard cost centers normalized to title case)
+    for m in mappings.values():
+        if m.vertical:
+            v_clean = m.vertical.strip()
+            v_lower = v_clean.lower()
+            if v_lower == 'common':
+                m.vertical = 'Common'
+            elif v_lower == 'factory':
+                m.vertical = 'Factory'
+            elif v_lower == 'office':
+                m.vertical = 'Office'
+            else:
+                m.vertical = v_clean
+
+    all_verticals = {m.vertical for m in mappings.values() if m.vertical}
+    if not all_verticals:
+        all_verticals = {"Common"}
+
+    # Classify into Revenue Centers vs Cost Centers
+    revenue_centers = set()
+    for m in mappings.values():
+        if m.head == "1. Sales Accounts" and m.vertical:
+            revenue_centers.add(m.vertical)
+
+    # Protect standard shared cost centers from being classified as revenue centers
+    revenue_centers = {rc for rc in revenue_centers if rc.lower() not in {"factory", "office", "common"}}
+
+    cost_centers = all_verticals - revenue_centers
+
+    # Sort centers alphabetically for deterministic layout
+    sorted_revenue_centers = sorted(list(revenue_centers))
+    sorted_cost_centers = sorted(list(cost_centers))
+
+    # Dynamic Column Structure
+    has_share_trading = 'Share Trading' in all_verticals
+    if has_share_trading:
+        operating_revenue_centers = [r for r in sorted_revenue_centers if r != 'Share Trading']
+        operating_cost_centers = [c for c in sorted_cost_centers if c != 'Share Trading']
         
-    # 3. Aggregate Trial Balance balances using mappings
+        all_cols = (
+            operating_revenue_centers + 
+            operating_cost_centers + 
+            ['Total (without share trading)', 'Share Trading', 'Total (including share trading)']
+        )
+        operating_verticals = operating_revenue_centers + operating_cost_centers
+    else:
+        all_cols = sorted_revenue_centers + sorted_cost_centers + ['Total']
+        operating_verticals = sorted_revenue_centers + sorted_cost_centers
+
+    # Dynamic categories from mappings
+    direct_expense_items = sorted(list({
+        m.classification.strip() for m in mappings.values()
+        if m.head == "3. Direct Expense" and m.classification and m.classification.strip()
+    }))
+    if not direct_expense_items:
+        direct_expense_items = ['Direct Expense']
+
+    indirect_income_items = sorted(list({
+        m.classification.strip() for m in mappings.values()
+        if m.head == "2. Indirect Income" and m.classification and m.classification.strip()
+    }))
+    if not indirect_income_items:
+        indirect_income_items = ['Indirect Income']
+
+    indirect_expense_items = sorted(list({
+        m.classification.strip() for m in mappings.values()
+        if m.head == "6. Indirect Expense" and m.classification and m.classification.strip()
+    }))
+    if not indirect_expense_items:
+        indirect_expense_items = ['Misc Expenses']
+
+    # Dynamic allocation rows
+    allocation_rows = [get_alloc_row_key(cc) for cc in sorted_cost_centers]
+
+    # Full category list
+    all_categories = (
+        ['Sales', 'Less: COGS', '3. Direct Expense'] + 
+        direct_expense_items + 
+        ['Gross margin', 'Gross margin %', 'Indirect Income'] + 
+        indirect_income_items + 
+        ['Net income', 'Net allocable income', '6. Indirect Expense'] + 
+        indirect_expense_items + 
+        ['Indirect costs'] + 
+        allocation_rows + 
+        ['Total indirect costs', 'Profit/ (loss) before tax', 'Net margin %']
+    )
+
+    # Initialize monthly and YTD aggregation structures
+    monthly_data: Dict[str, Dict[str, Decimal]] = {
+        cat: {col: Decimal('0.00') for col in all_cols} for cat in all_categories
+    }
+    monthly_data['1. Sales Accounts'] = {col: Decimal('0.00') for col in all_cols}
+
+    ytd_data: Dict[str, Dict[str, Decimal]] = {
+        cat: {col: Decimal('0.00') for col in all_cols} for cat in all_categories
+    }
+    ytd_data['1. Sales Accounts'] = {col: Decimal('0.00') for col in all_cols}
+
+    # Aggregate ledger entries
+    entries_map = {e.name.lower().strip(): e for e in parsed_entries}
+
     for ledger_name_lower, mapping in mappings.items():
         entry = entries_map.get(ledger_name_lower)
         if not entry:
             continue
-            
-        vertical = mapping.vertical
-        if vertical not in operating_verticals and vertical != 'Share Trading':
-            # Default fallback to Common
-            vertical = 'Common'
-            
-        # Parse balances (credits are negative in Tally, we flip them depending on Head type)
-        # Head mappings:
-        # Sales & Indirect Income are credit balances (credit balance is negative closing in parsed entry, so we do -entry.closing)
-        # Expenses & Purchases are debit balances (debit balance is positive closing)
-        op_val = _to_dec(entry.opening_net if entry.opening_net is not None else entry.opening) if (entry.opening_net is not None or entry.opening is not None) else Decimal('0.00')
-        cl_val = _to_dec(entry.closing_net if entry.closing_net is not None else entry.closing) if (entry.closing_net is not None or entry.closing is not None) else Decimal('0.00')
+
+        v = mapping.vertical.strip() if mapping.vertical else 'Common'
+        if v not in all_cols:
+            v = 'Common'
+
+        # Monthly net movement
+        op_val = _to_dec(entry.opening_net if entry.opening_net is not None else entry.opening)
+        cl_val = _to_dec(entry.closing_net if entry.closing_net is not None else entry.closing)
         val_month = cl_val - op_val
 
-        val_ytd = _to_dec(entry.closing_ytd) if entry.closing_ytd is not None else Decimal('0.00')
-        
-        # Ensure Sales and Incomes are strictly positive for dashboard metrics and charts.
-        # But use negative multiplication instead of abs() so that Sales Returns (Debits) properly reduce revenue.
+        # YTD closing
+        val_ytd = _to_dec(entry.closing_ytd)
+
+        # Apply sign corrections for revenue and income
         if mapping.head in {"1. Sales Accounts", "2. Indirect Income"}:
             val_month = -val_month
             val_ytd = -val_ytd
-            
-        if mapping.head == "1. Sales Accounts":
-            m_sales, y_sales = get_or_create_line('Sales')
-            m_sales[vertical] += val_month
-            y_sales[vertical] += val_ytd
-            
-        elif mapping.head == "3. Direct Expense":
-            classification = mapping.classification or 'Insurance expenses'
-            m_direct, y_direct = get_or_create_line(classification)
-            m_direct[vertical] += val_month
-            y_direct[vertical] += val_ytd
-            
-        elif mapping.head == "5. Purchase Accounts":
-            # Purchases go into COGS calculation
-            # We'll accumulate them in a temporary COGS purchases line
-            m_purch, y_purch = get_or_create_line('COGS_Purchases')
-            m_purch[vertical] += val_month
-            y_purch[vertical] += val_ytd
-            
-        elif mapping.head == "2. Indirect Income":
-            classification = mapping.classification or 'Foreign Exchange Gain'
-            m_ind_inc, y_ind_inc = get_or_create_line(classification)
-            m_ind_inc[vertical] += val_month
-            y_ind_inc[vertical] += val_ytd
-            
-        elif mapping.head == "6. Indirect Expense":
-            classification = mapping.classification or 'Misc Expenses'
-            m_ind_exp, y_ind_exp = get_or_create_line(classification)
-            m_ind_exp[vertical] += val_month
-            y_ind_exp[vertical] += val_ytd
 
-    # 4. Perform calculations & Roll-ups
+        if mapping.head == "1. Sales Accounts":
+            monthly_data['Sales'][v] += val_month
+            ytd_data['Sales'][v] += val_ytd
+            monthly_data['1. Sales Accounts'][v] += val_month
+            ytd_data['1. Sales Accounts'][v] += val_ytd
+
+        elif mapping.head == "3. Direct Expense":
+            classification = (mapping.classification or 'Direct Expense').strip()
+            if classification not in monthly_data:
+                classification = 'Direct Expense'
+            monthly_data[classification][v] += val_month
+            ytd_data[classification][v] += val_ytd
+
+        elif mapping.head == "5. Purchase Accounts":
+            # COGS Purchases accumulator
+            if 'COGS_Purchases' not in monthly_data:
+                monthly_data['COGS_Purchases'] = {col: Decimal('0.00') for col in all_cols}
+                ytd_data['COGS_Purchases'] = {col: Decimal('0.00') for col in all_cols}
+            monthly_data['COGS_Purchases'][v] += val_month
+            ytd_data['COGS_Purchases'][v] += val_ytd
+
+        elif mapping.head == "2. Indirect Income":
+            classification = (mapping.classification or 'Indirect Income').strip()
+            if classification not in monthly_data:
+                classification = 'Indirect Income'
+            monthly_data[classification][v] += val_month
+            ytd_data[classification][v] += val_ytd
+
+        elif mapping.head == "6. Indirect Expense":
+            classification = (mapping.classification or 'Misc Expenses').strip()
+            if classification not in monthly_data:
+                classification = 'Misc Expenses'
+            monthly_data[classification][v] += val_month
+            ytd_data[classification][v] += val_ytd
+
+    # Calculate stock & COGS and perform roll-ups
     for is_ytd in [False, True]:
         data = ytd_data if is_ytd else monthly_data
-        
-        # Calculate 3. Direct Expense totals
-        for v in all_verticals:
-            data['3. Direct Expense'][v] = sum(data[cat][v] for cat in direct_expense_items)
-            
-        # Calculate Purchases/COGS
-        # Accumulate stock dynamically per vertical
-        stock_changes = {v: Decimal('0.00') for v in all_verticals}
-        total_op_stock = {v: Decimal('0.00') for v in all_verticals}
-        total_cl_stock = {v: Decimal('0.00') for v in all_verticals}
-        
-        # 1. Sum up everything as it exists in Tally
+
+        # Sum Direct Expenses
+        for v in all_cols:
+            data['3. Direct Expense'][v] = sum(data[cat][v] for cat in direct_expense_items if cat in data)
+
+        # COGS Calculations
+        total_op_stock = {col: Decimal('0.00') for col in all_cols}
+        total_cl_stock = {col: Decimal('0.00') for col in all_cols}
+
         for ledger_name, mapping in mappings.items():
             if mapping.classification == 'Opening Stock' or mapping.head == 'Stock-in-hand':
                 entry = entries_map.get(ledger_name)
                 if entry:
-                    v = mapping.vertical or 'Factory'
-                    if v not in all_verticals and v != 'Share Trading':
+                    v = mapping.vertical.strip() if mapping.vertical else 'Common'
+                    if v not in all_cols:
                         v = 'Common'
-                        
                     total_op_stock[v] += _to_dec(entry.opening if not is_ytd else (entry.opening_ytd or Decimal('0.00')))
                     total_cl_stock[v] += _to_dec(entry.closing if not is_ytd else (entry.closing_ytd or Decimal('0.00')))
 
-        # 2. Apply the override once per vertical and calculate final change
-        for v in all_verticals:
-            final_cl = _to_dec(closing_stock) if (closing_stock > 0.0 and v == 'Factory') else total_cl_stock[v]
-            stock_changes[v] = total_op_stock[v] - final_cl
+        # Stock override target
+        target_stock_vertical = 'Factory' if 'Factory' in all_verticals else (sorted_cost_centers[0] if sorted_cost_centers else 'Common')
 
-        # Apply changes to the correct verticals
-        for v in all_verticals:
+        for v in all_cols:
+            final_cl = _to_dec(closing_stock) if (closing_stock > 0.0 and v == target_stock_vertical) else total_cl_stock[v]
+            stock_change = total_op_stock[v] - final_cl
             purch = data.get('COGS_Purchases', {}).get(v, Decimal('0.00'))
-            data['Less: COGS'][v] = purch + stock_changes.get(v, Decimal('0.00'))
-            
-        # Totals for Sales, COGS, Direct Expense (without share trading)
-        data['Sales']['Total (without share trading)'] = sum(data['Sales'][v] for v in operating_verticals)
-        data['Less: COGS']['Total (without share trading)'] = sum(data['Less: COGS'][v] for v in operating_verticals)
-        data['3. Direct Expense']['Total (without share trading)'] = sum(data['3. Direct Expense'][v] for v in operating_verticals)
-        
-        # Totals including Share Trading
-        data['Sales']['Total (including share trading)'] = data['Sales']['Total (without share trading)'] + data['Sales']['Share Trading']
-        data['Less: COGS']['Total (including share trading)'] = data['Less: COGS']['Total (without share trading)'] + data['Less: COGS']['Share Trading']
-        data['3. Direct Expense']['Total (including share trading)'] = data['3. Direct Expense']['Total (without share trading)'] + data['3. Direct Expense']['Share Trading']
-        
+            data['Less: COGS'][v] = purch + stock_change
+
+        # Calculate totals without share trading
+        if has_share_trading:
+            for cat in ['Sales', 'Less: COGS', '3. Direct Expense'] + direct_expense_items:
+                data[cat]['Total (without share trading)'] = sum(data[cat][v] for v in operating_verticals)
+                data[cat]['Total (including share trading)'] = data[cat]['Total (without share trading)'] + data[cat]['Share Trading']
+        else:
+            for cat in ['Sales', 'Less: COGS', '3. Direct Expense'] + direct_expense_items:
+                data[cat]['Total'] = sum(data[cat][v] for v in sorted_revenue_centers + sorted_cost_centers)
+
         # Calculate Gross Margin
-        for v in all_verticals:
+        for v in all_cols:
             data['Gross margin'][v] = data['Sales'][v] - data['Less: COGS'][v] - data['3. Direct Expense'][v]
-            if abs(data['Sales'][v]) > 0.01:
+            if abs(data['Sales'][v]) > Decimal('0.01'):
                 data['Gross margin %'][v] = data['Gross margin'][v] / data['Sales'][v]
             else:
                 data['Gross margin %'][v] = Decimal('0.00')
-                
-        # Calculate Indirect Income total
-        for v in all_verticals:
-            data['Indirect Income'][v] = sum(data[cat][v] for cat in indirect_income_items)
-            
-        data['Indirect Income']['Total (without share trading)'] = sum(data['Indirect Income'][v] for v in operating_verticals)
-        data['Indirect Income']['Total (including share trading)'] = data['Indirect Income']['Total (without share trading)'] + data['Indirect Income']['Share Trading']
-        
-        # Calculate Net Income
-        for v in all_verticals:
+
+        # Sum Indirect Income
+        for v in all_cols:
+            data['Indirect Income'][v] = sum(data[cat][v] for cat in indirect_income_items if cat in data)
+
+        if has_share_trading:
+            for cat in ['Indirect Income'] + indirect_income_items:
+                data[cat]['Total (without share trading)'] = sum(data[cat][v] for v in operating_verticals)
+                data[cat]['Total (including share trading)'] = data[cat]['Total (without share trading)'] + data[cat]['Share Trading']
+        else:
+            for cat in ['Indirect Income'] + indirect_income_items:
+                data[cat]['Total'] = sum(data[cat][v] for v in sorted_revenue_centers + sorted_cost_centers)
+
+        # Calculate Net Income before indirect expenses
+        for v in all_cols:
             data['Net income'][v] = data['Gross margin'][v] + data['Indirect Income'][v]
             data['Net allocable income'][v] = data['Net income'][v]
-            
-        # Calculate Indirect Expense total (6. Indirect Expense row)
-        for v in all_verticals:
-            data['6. Indirect Expense'][v] = sum(data[cat][v] for cat in indirect_expense_items)
+
+        # Sum Indirect Expenses
+        for v in all_cols:
+            data['6. Indirect Expense'][v] = sum(data[cat][v] for cat in indirect_expense_items if cat in data)
             data['Indirect costs'][v] = data['6. Indirect Expense'][v]
-            
-        data['6. Indirect Expense']['Total (without share trading)'] = sum(data['6. Indirect Expense'][v] for v in operating_verticals)
-        data['6. Indirect Expense']['Total (including share trading)'] = data['6. Indirect Expense']['Total (without share trading)'] + data['6. Indirect Expense']['Share Trading']
-        data['Indirect costs']['Total (without share trading)'] = data['6. Indirect Expense']['Total (without share trading)']
-        data['Indirect costs']['Total (including share trading)'] = data['6. Indirect Expense']['Total (including share trading)']
-        
-        # 5. Allocations (Factory, Office, Common)
-        # Factory Allocation: Factory costs allocated to targeted verticals
-        factory_cogs = data['Less: COGS']['Factory']
-        factory_ind = data['Indirect costs']['Factory']
-        factory_total_pool = factory_cogs + factory_ind
-        
-        factory_targets = [v for v in mapped_verticals if v not in {'Factory', 'Office', 'Common'}]
-        factory_share = factory_total_pool / (len(factory_targets) or Decimal('1.0'))
-        
-        for target in factory_targets:
-            data['Factory'][target] = factory_share
-            
-        data['Factory']['Factory'] = -factory_total_pool
-        data['Factory']['Total (without share trading)'] = Decimal('0.00')
-        data['Factory']['Total (including share trading)'] = Decimal('0.00')
-        
-        # Office Allocation: Office costs allocated to targeted verticals
-        office_cogs = data['Less: COGS']['Office']
-        office_ind = data['Indirect costs']['Office']
-        office_total_pool = office_cogs + office_ind
-        
-        office_targets = [v for v in mapped_verticals if v not in {'Factory', 'Office', 'Common'}]
-        office_share = office_total_pool / (len(office_targets) or Decimal('1.0'))
-        
-        for target in office_targets:
-            data['Office'][target] = office_share
-            
-        data['Office']['Office'] = -office_total_pool
-        data['Office']['Total (without share trading)'] = Decimal('0.00')
-        data['Office']['Total (including share trading)'] = Decimal('0.00')
-        
-        # Common Allocation: Common costs allocated proportionally to all revenue-generating verticals
-        common_ind = data['Indirect costs']['Common']
-        
-        revenue_verticals = [v for v in mapped_verticals if v not in {'Factory', 'Office', 'Common'}]
-        total_revenue_pool = sum(data['Sales'][v] for v in revenue_verticals)
-        
-        # Allocate proportionally to ensure 100% distribution and no orphaned costs
-        for v in revenue_verticals:
-            if total_revenue_pool > 0:
-                data['Common'][v] = common_ind * (data['Sales'][v] / total_revenue_pool)
-            else:
-                data['Common'][v] = common_ind * (Decimal('1.0') / (len(revenue_verticals) or Decimal('1.0')))
-            
-        data['Common']['Common'] = -common_ind
-        data['Common']['Total (without share trading)'] = Decimal('0.00')
-        data['Common']['Total (including share trading)'] = Decimal('0.00')
-            
-        # Total indirect costs
-        for v in all_verticals:
-            data['Total indirect costs'][v] = data['Indirect costs'][v] + (data['Factory'][v] or Decimal('0.00')) + (data['Office'][v] or Decimal('0.00')) + (data['Common'][v] or Decimal('0.00'))
-            
-        # Profit / Loss before tax
-        for v in all_verticals:
+
+        if has_share_trading:
+            for cat in ['6. Indirect Expense', 'Indirect costs']:
+                data[cat]['Total (without share trading)'] = sum(data[cat][v] for v in operating_verticals)
+                data[cat]['Total (including share trading)'] = data[cat]['Total (without share trading)'] + data[cat]['Share Trading']
+        else:
+            for cat in ['6. Indirect Expense', 'Indirect costs']:
+                data[cat]['Total'] = sum(data[cat][v] for v in sorted_revenue_centers + sorted_cost_centers)
+
+        # 4. Proportional Cost Allocation Engine
+        # Safely compute the revenue pool using absolute values of the raw Sales Accounts 
+        # This prevents negative Credit signs from breaking the math
+        revenue_verticals = [rc for rc in sorted_revenue_centers]
+        total_revenue_pool = sum(abs(data['1. Sales Accounts'][rc]) for rc in revenue_verticals)
+
+        for cc in sorted_cost_centers:
+            # Shared cost pool for cost center cc
+            total_cc_expense = data['Indirect costs'][cc] + data['Less: COGS'][cc] + data['3. Direct Expense'][cc]
+            alloc_row_name = get_alloc_row_key(cc)
+
+            for rc in sorted_revenue_centers:
+                if total_revenue_pool > Decimal('0.00'):
+                    sales_rc = abs(data['1. Sales Accounts'][rc])
+                    data[alloc_row_name][rc] = total_cc_expense * (sales_rc / total_revenue_pool)
+                else:
+                    # Fallback to even split if revenue is exactly zero
+                    data[alloc_row_name][rc] = total_cc_expense * (Decimal('1.0') / (Decimal(str(len(revenue_verticals))) or Decimal('1.0')))
+
+            # Clear cost center's own allocated column by negating the pool
+            data[alloc_row_name][cc] = -total_cc_expense
+            data[alloc_row_name]['Total (including share trading)' if has_share_trading else 'Total'] = Decimal('0.00')
+            if has_share_trading:
+                data[alloc_row_name]['Total (without share trading)'] = Decimal('0.00')
+
+        # Total Indirect Costs including allocations
+        for v in all_cols:
+            allocated_share = sum(data[get_alloc_row_key(cc)][v] for cc in sorted_cost_centers)
+            data['Total indirect costs'][v] = data['Indirect costs'][v] + allocated_share
+
+        # Profit / Loss before tax & Net Margin %
+        for v in all_cols:
             data['Profit/ (loss) before tax'][v] = data['Gross margin'][v] + data['Indirect Income'][v] - data['Total indirect costs'][v]
-            if abs(data['Sales'][v]) > 0.01:
+            if abs(data['Sales'][v]) > Decimal('0.01'):
                 data['Net margin %'][v] = data['Profit/ (loss) before tax'][v] / data['Sales'][v]
             else:
                 data['Net margin %'][v] = Decimal('0.00')
 
+        # Group detail rows
         for cat in direct_expense_items + indirect_income_items + indirect_expense_items:
-            data[cat]['Total (without share trading)'] = sum(data[cat][v] for v in operating_verticals)
-            data[cat]['Total (including share trading)'] = data[cat]['Total (without share trading)'] + data[cat]['Share Trading']
+            if has_share_trading:
+                data[cat]['Total (without share trading)'] = sum(data[cat][v] for v in operating_verticals)
+                data[cat]['Total (including share trading)'] = data[cat]['Total (without share trading)'] + data[cat]['Share Trading']
+            else:
+                data[cat]['Total'] = sum(data[cat][v] for v in sorted_revenue_centers + sorted_cost_centers)
 
-    # 5. Format responses
+    # 5. Debtors and Creditors Pivot Calculation
+    from models.pl_data import DebtorCreditorPivot, DebtorCreditorPivotEntry
+
+    debtor_map = {}
+    creditor_map = {}
+
+    for entry in parsed_entries:
+        name_lower = entry.name.lower().strip()
+        if name_lower in {"particulars", "grand total", "total", "grand", "net profit", "net loss"}:
+            continue
+
+        mapping = mappings.get(name_lower)
+        if not mapping:
+            continue
+
+        head = mapping.head.strip() if mapping.head else ""
+        group = mapping.group.strip() if mapping.group else ""
+
+        is_debtor = "Sundry Debtor" in head or "Sundry Debtor" in group
+        is_creditor = "Sundry Creditor" in head or "Sundry Creditor" in group
+
+        if not (is_debtor or is_creditor):
+            continue
+
+        v = mapping.vertical.strip() if mapping.vertical else 'Common'
+        if v not in all_cols:
+            v = 'Common'
+
+        target_map = debtor_map if is_debtor else creditor_map
+
+        if v not in target_map:
+            target_map[v] = {
+                "opening": 0.0, "debit": 0.0, "credit": 0.0, "closing": 0.0,
+                "opening_ytd": 0.0, "debit_ytd": 0.0, "credit_ytd": 0.0, "closing_ytd": 0.0
+            }
+
+        # Monthly values
+        target_map[v]["opening"] += float(entry.opening_net if entry.opening_net is not None else (entry.opening or 0.0))
+        target_map[v]["debit"] += float(entry.debit_net if entry.debit_net is not None else (entry.debit or 0.0))
+        target_map[v]["credit"] += float(entry.credit_net if entry.credit_net is not None else (entry.credit or 0.0))
+        target_map[v]["closing"] += float(entry.closing_net if entry.closing_net is not None else (entry.closing or 0.0))
+
+        # YTD values
+        target_map[v]["opening_ytd"] += float(entry.opening_ytd or 0.0)
+        target_map[v]["debit_ytd"] += float(entry.debit_ytd or 0.0)
+        target_map[v]["credit_ytd"] += float(entry.credit_ytd or 0.0)
+        target_map[v]["closing_ytd"] += float(entry.closing_ytd or 0.0)
+
+    # Convert to Pydantic lists
+    debtors_pivot_entries = []
+    creditors_pivot_entries = []
+
+    # Get a sorted list of unique verticals present in the maps
+    all_pivot_verticals = sorted(list(set(debtor_map.keys()) | set(creditor_map.keys())))
+
+    for pv in all_pivot_verticals:
+        if pv in debtor_map:
+            d = debtor_map[pv]
+            debtors_pivot_entries.append(DebtorCreditorPivotEntry(
+                vertical=pv,
+                opening=round(d["opening"], 2),
+                debit=round(d["debit"], 2),
+                credit=round(d["credit"], 2),
+                closing=round(d["closing"], 2),
+                opening_ytd=round(d["opening_ytd"], 2),
+                debit_ytd=round(d["debit_ytd"], 2),
+                credit_ytd=round(d["credit_ytd"], 2),
+                closing_ytd=round(d["closing_ytd"], 2),
+            ))
+        if pv in creditor_map:
+            c = creditor_map[pv]
+            creditors_pivot_entries.append(DebtorCreditorPivotEntry(
+                vertical=pv,
+                opening=round(c["opening"], 2),
+                debit=round(c["debit"], 2),
+                credit=round(c["credit"], 2),
+                closing=round(c["closing"], 2),
+                opening_ytd=round(c["opening_ytd"], 2),
+                debit_ytd=round(c["debit_ytd"], 2),
+                credit_ytd=round(c["credit_ytd"], 2),
+                closing_ytd=round(c["closing_ytd"], 2),
+            ))
+
+    pivot_data = DebtorCreditorPivot(debtors=debtors_pivot_entries, creditors=creditors_pivot_entries)
+
+    # 6. Format responses
     def build_breakdown(data_dict) -> PLBreakdown:
         rows = []
         for cat in all_categories:
-            is_header = cat in ['3. Direct Expense', 'Indirect Income', '6. Indirect Expense', 'Allocation of expenses:']
-            is_total = cat in ['Gross margin', 'Gross margin %', 'Net income', 'Indirect costs', 'Total indirect costs', 'Profit/ (loss) before tax', 'Net margin %']
+            is_header = cat in (
+                ['3. Direct Expense', 'Indirect Income', '6. Indirect Expense'] + 
+                [get_alloc_row_key(cc) for cc in sorted_cost_centers]
+            )
+            is_total = cat in [
+                'Gross margin', 'Gross margin %', 'Net income', 'Indirect costs', 
+                'Total indirect costs', 'Profit/ (loss) before tax', 'Net margin %'
+            ]
             rows.append(PLRow(
                 particulars=cat,
-                values=data_dict[cat],
+                values={k: float(v) for k, v in data_dict[cat].items()},
                 is_header=is_header,
                 is_total=is_total
             ))
-        return PLBreakdown(columns=all_verticals, rows=rows)
-        
+        return PLBreakdown(columns=all_cols, rows=rows)
+
     m_breakdown = build_breakdown(monthly_data)
     y_breakdown = build_breakdown(ytd_data)
-    
+
     # Calculate KPIs
+    kpi_col = 'Total (including share trading)' if has_share_trading else 'Total'
     kpis = {
-        "monthly_revenue": monthly_data['Sales']['Total (including share trading)'],
-        "monthly_gross_margin_pct": monthly_data['Gross margin %']['Total (including share trading)'],
-        "monthly_net_income": monthly_data['Profit/ (loss) before tax']['Total (including share trading)'],
-        "monthly_expenses": monthly_data['Total indirect costs']['Total (including share trading)'],
-        "ytd_revenue": ytd_data['Sales']['Total (including share trading)'],
-        "ytd_gross_margin_pct": ytd_data['Gross margin %']['Total (including share trading)'],
-        "ytd_net_income": ytd_data['Profit/ (loss) before tax']['Total (including share trading)'],
-        "ytd_expenses": ytd_data['Total indirect costs']['Total (including share trading)'],
+        "monthly_revenue": float(monthly_data['Sales'][kpi_col]),
+        "monthly_gross_margin_pct": float(monthly_data['Gross margin %'][kpi_col]),
+        "monthly_net_income": float(monthly_data['Profit/ (loss) before tax'][kpi_col]),
+        "monthly_expenses": float(monthly_data['Total indirect costs'][kpi_col]),
+        "ytd_revenue": float(ytd_data['Sales'][kpi_col]),
+        "ytd_gross_margin_pct": float(ytd_data['Gross margin %'][kpi_col]),
+        "ytd_net_income": float(ytd_data['Profit/ (loss) before tax'][kpi_col]),
+        "ytd_expenses": float(ytd_data['Total indirect costs'][kpi_col]),
     }
-    
+
     return PLDataResponse(
         month_label=month_label,
         ytd_label=ytd_label,
         month_data=m_breakdown,
         ytd_data=y_breakdown,
         kpis=kpis,
-        has_ytd=has_ytd
+        has_ytd=has_ytd,
+        debtors_creditors_pivot=pivot_data
     )
+

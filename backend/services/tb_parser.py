@@ -160,15 +160,34 @@ def _clean_float(val) -> Optional[float]:
         if isinstance(val, (int, float)):
             return float(val)
             
-        s_val = str(val).replace(',', '').strip().lower()
-        
-        # Determine sign based on Tally suffix
-        multiplier = -1 if s_val.endswith(' cr') else 1
-        # Strip suffix if present
-        if s_val.endswith(' dr') or s_val.endswith(' cr'):
-            s_val = s_val[:-3].strip()
+        s_val = str(val).strip().lower()
+        if not s_val:
+            return None
             
-        if s_val == "" or s_val == "-":
+        # Determine sign based on Tally suffix
+        multiplier = 1
+        if s_val.endswith('cr') or s_val.endswith(' cr'):
+            multiplier = -1
+            if s_val.endswith(' cr'):
+                s_val = s_val[:-3].strip()
+            elif s_val.endswith('cr'):
+                s_val = s_val[:-2].strip()
+        elif s_val.endswith('dr') or s_val.endswith(' dr'):
+            multiplier = 1
+            if s_val.endswith(' dr'):
+                s_val = s_val[:-3].strip()
+            elif s_val.endswith('dr'):
+                s_val = s_val[:-2].strip()
+
+        # Handle parentheses for negative numbers (e.g., (1,234.00))
+        if s_val.startswith('(') and s_val.endswith(')'):
+            multiplier *= -1
+            s_val = s_val[1:-1].strip()
+
+        # Strip commas, currency symbols, and spaces
+        s_val = s_val.replace(',', '').replace('₹', '').replace('$', '').replace(' ', '')
+        
+        if s_val == "" or s_val == "-" or s_val == "--":
             return None
             
         return float(s_val) * multiplier

@@ -11,6 +11,21 @@ class PLBreakdown(BaseModel):
     columns: List[str]  # Vertical headers
     rows: List[PLRow]   # All row entries
 
+class DebtorCreditorPivotEntry(BaseModel):
+    vertical: str
+    opening: float
+    debit: float
+    credit: float
+    closing: float
+    opening_ytd: float
+    debit_ytd: float
+    credit_ytd: float
+    closing_ytd: float
+
+class DebtorCreditorPivot(BaseModel):
+    debtors: List[DebtorCreditorPivotEntry]
+    creditors: List[DebtorCreditorPivotEntry]
+
 class PLDataResponse(BaseModel):
     month_label: str    # e.g., "Mar'26"
     ytd_label: str      # e.g., "YTD'26" (April to Mar)
@@ -18,4 +33,6 @@ class PLDataResponse(BaseModel):
     ytd_data: PLBreakdown
     kpis: Dict[str, float]  # e.g., Revenue, Gross Margin %, Net Income, Total Expenses
     has_ytd: bool = True
+    debtors_creditors_pivot: Optional[DebtorCreditorPivot] = None
+
 
