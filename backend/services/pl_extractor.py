@@ -79,8 +79,8 @@ def extract_pl_dashboard(
         # Head mappings:
         # Sales & Indirect Income are credit balances (credit balance is negative closing in parsed entry, so we do -entry.closing)
         # Expenses & Purchases are debit balances (debit balance is positive closing)
-        op_val = _to_dec(entry.opening) if entry.opening is not None else Decimal('0.00')
-        cl_val = _to_dec(entry.closing) if entry.closing is not None else Decimal('0.00')
+        op_val = _to_dec(entry.opening_net if entry.opening_net is not None else entry.opening) if (entry.opening_net is not None or entry.opening is not None) else Decimal('0.00')
+        cl_val = _to_dec(entry.closing_net if entry.closing_net is not None else entry.closing) if (entry.closing_net is not None or entry.closing is not None) else Decimal('0.00')
         val_month = cl_val - op_val
 
         val_ytd = _to_dec(entry.closing_ytd) if entry.closing_ytd is not None else Decimal('0.00')

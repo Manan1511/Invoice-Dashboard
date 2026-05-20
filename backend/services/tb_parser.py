@@ -160,18 +160,17 @@ def _clean_float(val) -> Optional[float]:
         if isinstance(val, (int, float)):
             return float(val)
             
-        s_val = str(val).replace(',', '').strip()
+        s_val = str(val).replace(',', '').strip().lower()
         
-        is_credit = s_val.lower().endswith(' cr')
-        # Strip Tally's standard Dr/Cr suffixes
-        if s_val.lower().endswith(' dr') or is_credit:
+        # Determine sign based on Tally suffix
+        multiplier = -1 if s_val.endswith(' cr') else 1
+        # Strip suffix if present
+        if s_val.endswith(' dr') or s_val.endswith(' cr'):
             s_val = s_val[:-3].strip()
             
         if s_val == "" or s_val == "-":
             return None
             
-        parsed_float = float(s_val)
-        # If it was a credit, it needs to be negative for the math to work later
-        return -parsed_float if is_credit else parsed_float
+        return float(s_val) * multiplier
     except ValueError:
         return None
