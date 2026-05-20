@@ -1,6 +1,8 @@
 import os
 import uuid
 import json
+# Trigger hot-reload to refresh cache with updated template mappings
+
 import asyncio
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse

@@ -240,6 +240,8 @@ def replace_ledger_list_in_template(new_mappings: List[LedgerMapping]) -> None:
         ws.cell(row=row, column=17, value=f"=IFERROR(VLOOKUP($B{row},'TB YTD'!$4:$1048576,MATCH('List of Ledgers '!Q$4,'TB YTD'!$4:$4,0),0),0)")
 
     wb.save(TEMPLATE_PATH)
+    load_mapped_ledgers.cache_clear()
+
 
 
 def append_new_mappings_to_template(new_mappings: List[LedgerMapping]) -> None:
@@ -287,3 +289,4 @@ def append_new_mappings_to_template(new_mappings: List[LedgerMapping]) -> None:
         ws.cell(row=row, column=17, value=f"=IFERROR(VLOOKUP($B{row},'TB YTD'!$4:$1048576,MATCH('List of Ledgers '!Q$4,'TB YTD'!$4:$4,0),0),0)")
 
     wb.save(TEMPLATE_PATH)
+    load_mapped_ledgers.cache_clear()
