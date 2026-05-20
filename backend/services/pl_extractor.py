@@ -197,26 +197,19 @@ def extract_pl_dashboard(
         data['Office']['Total (without share trading)'] = office_share * 3
         data['Office']['Total (including share trading)'] = office_share * 3
         
-        # Common Allocation: Common costs (COGS + Indirect costs) allocated to Clarus and Spices - Vashi based on Sales ratio
+        # Common Allocation: Common costs allocated proportionally to all revenue-generating verticals
         common_ind = data['Indirect costs']['Common']
         total_sales_for_common = data['Sales']['Total (without share trading)'] or 1.0
         
-        if not is_ytd:
-            # Monthly allocation matching Excel formula: Clarus gets G69*C7/J7, Spices-Vashi gets G69*I7/J7
-            data['Common']['Clarus'] = common_ind * (data['Sales']['Clarus'] / total_sales_for_common)
-            data['Common']['Spices - Vashi'] = common_ind * (data['Sales']['Spices - Vashi'] / total_sales_for_common)
-            data['Common']['Common'] = -common_ind
-            data['Common']['Total (without share trading)'] = data['Common']['Clarus'] + data['Common']['Spices - Vashi'] + data['Common']['Common']
-            data['Common']['Total (including share trading)'] = data['Common']['Total (without share trading)']
-        else:
-            # YTD allocation matching Excel: Bluestreak, Clarus, IT, Spices - Vashi get proportional common costs
-            data['Common']['Bluestreak'] = common_ind * (data['Sales']['Bluestreak'] / total_sales_for_common)
-            data['Common']['Clarus'] = common_ind * (data['Sales']['Clarus'] / total_sales_for_common)
-            data['Common']['IT'] = common_ind * (data['Sales']['IT'] / total_sales_for_common)
-            data['Common']['Spices - Vashi'] = common_ind * (data['Sales']['Spices - Vashi'] / total_sales_for_common)
-            data['Common']['Common'] = -common_ind
-            data['Common']['Total (without share trading)'] = sum(data['Common'][v] for v in operating_verticals)
-            data['Common']['Total (including share trading)'] = data['Common']['Total (without share trading)']
+        revenue_verticals = ['Bluestreak', 'Clarus', 'IT', 'Spices - A to Z', 'Spices - Vashi']
+        
+        # Allocate proportionally to ensure 100% distribution and no orphaned costs
+        for v in revenue_verticals:
+            data['Common'][v] = common_ind * (data['Sales'][v] / total_sales_for_common)
+            
+        data['Common']['Common'] = -common_ind
+        data['Common']['Total (without share trading)'] = sum(data['Common'][v] for v in operating_verticals)
+        data['Common']['Total (including share trading)'] = data['Common']['Total (without share trading)']
             
         # Total indirect costs
         for v in all_verticals:
