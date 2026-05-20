@@ -155,13 +155,16 @@ def _clean_float(val) -> Optional[float]:
             
         s_val = str(val).replace(',', '').strip()
         
+        is_credit = s_val.lower().endswith(' cr')
         # Strip Tally's standard Dr/Cr suffixes
-        if s_val.lower().endswith(' dr') or s_val.lower().endswith(' cr'):
+        if s_val.lower().endswith(' dr') or is_credit:
             s_val = s_val[:-3].strip()
             
         if s_val == "" or s_val == "-":
             return None
             
-        return float(s_val)
+        parsed_float = float(s_val)
+        # If it was a credit, it needs to be negative for the math to work later
+        return -parsed_float if is_credit else parsed_float
     except ValueError:
         return None

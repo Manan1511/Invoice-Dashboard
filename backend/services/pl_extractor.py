@@ -120,7 +120,10 @@ def extract_pl_dashboard(
         # Calculate Purchases/COGS
         # Accumulate stock dynamically per vertical
         stock_changes = {v: 0.0 for v in all_verticals}
+        total_op_stock = {v: 0.0 for v in all_verticals}
+        total_cl_stock = {v: 0.0 for v in all_verticals}
         
+        # 1. Sum up everything as it exists in Tally
         for ledger_name, mapping in mappings.items():
             if mapping.classification == 'Opening Stock' or mapping.head == 'Stock-in-hand':
                 entry = entries_map.get(ledger_name)
@@ -129,13 +132,13 @@ def extract_pl_dashboard(
                     if v not in all_verticals and v != 'Share Trading':
                         v = 'Common'
                         
-                    op_val = entry.opening if not is_ytd else (entry.opening_ytd or 0.0)
-                    cl_val = entry.closing if not is_ytd else (entry.closing_ytd or 0.0)
-                    
-                    # Use global closing_stock override if provided, otherwise use ledger
-                    final_cl_val = closing_stock if (closing_stock > 0 and v == 'Factory') else cl_val
-                    
-                    stock_changes[v] += (op_val or 0.0) - (final_cl_val or 0.0)
+                    total_op_stock[v] += (entry.opening if not is_ytd else (entry.opening_ytd or 0.0))
+                    total_cl_stock[v] += (entry.closing if not is_ytd else (entry.closing_ytd or 0.0))
+
+        # 2. Apply the override once per vertical and calculate final change
+        for v in all_verticals:
+            final_cl = closing_stock if (closing_stock > 0 and v == 'Factory') else total_cl_stock[v]
+            stock_changes[v] = total_op_stock[v] - final_cl
 
         # Apply changes to the correct verticals
         for v in all_verticals:
