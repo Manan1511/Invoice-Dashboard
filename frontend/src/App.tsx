@@ -5,7 +5,7 @@ import {
   TrendingUp, Layers, HelpCircle, X, WifiOff, Edit2, Plus, Trash2, BookOpen
 } from 'lucide-react';
 import { 
-  ResponsiveContainer, XAxis, YAxis, Tooltip, Legend, AreaChart, Area
+  ResponsiveContainer, XAxis, YAxis, Tooltip, Legend, BarChart, Bar, ReferenceLine
 } from 'recharts';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -743,21 +743,33 @@ export default function App() {
     return val < 0 ? `(${formatted})` : formatted;
   };
 
-  // Prepare chart data for Recharts
+  // Columns that are aggregation/allocation pools — not individual business verticals
+  const EXCLUDED_CHART_COLUMNS = new Set([
+    'Total (without share trading)',
+    'Total (including share trading)',
+    'Factory',
+    'Office',
+    'Common',
+    'Share Trading',
+  ]);
+
+  // Prepare chart data for Recharts — always derived dynamically from API response
   const getChartData = () => {
     if (!plData) return [];
     const sourceData = activeTab === 'MONTH' ? plData.month_data : plData.ytd_data;
-    
-    // Find Sales and Gross Profit rows
+
+    // Find Sales and Gross Margin rows
     const salesRow = sourceData.rows.find(r => r.particulars === 'Sales');
     const marginRow = sourceData.rows.find(r => r.particulars === 'Gross margin');
-    
-    const chartVerticals = ['Bluestreak', 'Clarus', 'IT', 'Spices - A to Z', 'Spices - Vashi'];
-    
+
+    // Derive verticals from the API columns — exclude aggregation/pool columns
+    const chartVerticals = sourceData.columns.filter(v => !EXCLUDED_CHART_COLUMNS.has(v));
+
     return chartVerticals.map(v => ({
       name: v,
-      Revenue: salesRow ? Math.max(0, salesRow.values[v] || 0) : 0,
-      "Gross Margin": marginRow ? Math.max(0, marginRow.values[v] || 0) : 0,
+      // Do NOT clamp to 0 — negative revenue or margin is meaningful data
+      Revenue: salesRow ? (salesRow.values[v] ?? 0) : 0,
+      "Gross Margin": marginRow ? (marginRow.values[v] ?? 0) : 0,
     }));
   };
 
@@ -1548,35 +1560,35 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Revenue Breakdown Chart */}
+              {/* Revenue & Margin Contribution by Vertical — grouped BarChart */}
               <div className="glass-panel chart-card">
                 <h3 className="chart-title">
-                  <BarChart2 size={20} style={{ color: 'var(--accent-emerald)' }} /> Revenue & Margin Contribution by Vertical
+                  <BarChart2 size={20} style={{ color: 'var(--accent-emerald)' }} /> Revenue &amp; Margin Contribution by Vertical
                 </h3>
                 <div style={{ height: '320px', width: '100%' }}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={getChartData()} margin={{ top: 10, right: 30, left: 20, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.4}/>
-                          <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                        </linearGradient>
-                        <linearGradient id="colorGP" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4}/>
-                          <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
+                    <BarChart data={getChartData()} margin={{ top: 10, right: 30, left: 20, bottom: 0 }} barCategoryGap="30%" barGap={4}>
                       <XAxis dataKey="name" stroke="#6b7280" fontSize={11} tickLine={false} />
-                      <YAxis stroke="#6b7280" fontSize={11} tickLine={false} tickFormatter={(v) => `₹${(v / 100000).toFixed(0)}L`} />
-                      <Tooltip 
+                      <YAxis
+                        stroke="#6b7280"
+                        fontSize={11}
+                        tickLine={false}
+                        tickFormatter={(v: number) => `₹${(v / 100000).toFixed(0)}L`}
+                      />
+                      <Tooltip
                         contentStyle={{ backgroundColor: '#0b1329', borderColor: 'rgba(255,255,255,0.08)', borderRadius: '12px' }}
                         labelStyle={{ color: '#fff', fontWeight: 'bold' }}
                         itemStyle={{ color: '#ccc' }}
+                        formatter={(value: number, name: string) => [
+                          `₹${(value / 100000).toFixed(2)}L`,
+                          name
+                        ]}
                       />
                       <Legend />
-                      <Area type="monotone" dataKey="Revenue" stroke="#10b981" fillOpacity={1} fill="url(#colorRev)" strokeWidth={2} />
-                      <Area type="monotone" dataKey="Gross Margin" stroke="#3b82f6" fillOpacity={1} fill="url(#colorGP)" strokeWidth={2} />
-                    </AreaChart>
+                      <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 3" />
+                      <Bar dataKey="Revenue" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={48} />
+                      <Bar dataKey="Gross Margin" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={48} />
+                    </BarChart>
                   </ResponsiveContainer>
                 </div>
               </div>
