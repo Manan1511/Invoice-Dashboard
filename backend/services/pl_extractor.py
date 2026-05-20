@@ -118,7 +118,17 @@ def extract_pl_dashboard(
         # But if they are empty, let's use the direct values from TB opening stock / closing stock!
         # Opening Stock ledger is usually mapped to "5. Purchase Accounts" or "Opening Stock".
         # Let's see: Opening stock in TB has name "Opening Stock".
-        opening_stock_entry = entries_map.get('opening stock')
+        # Safer way to find the stock ledger based on mapping rather than exact name match
+        opening_stock_entry = None
+        for ledger_name, mapping in mappings.items():
+            if mapping.classification == 'Opening Stock' or mapping.head == 'Stock-in-hand':
+                opening_stock_entry = entries_map.get(ledger_name)
+                if opening_stock_entry:
+                    break
+                    
+        # Fallback just in case
+        if not opening_stock_entry:
+            opening_stock_entry = entries_map.get('opening stock')
         op_stock_m = opening_stock_entry.opening if (opening_stock_entry and not is_ytd) else (opening_stock_entry.opening_ytd if (opening_stock_entry and is_ytd) else 0.0)
         cl_stock_m = opening_stock_entry.closing if (opening_stock_entry and not is_ytd) else (opening_stock_entry.closing_ytd if (opening_stock_entry and is_ytd) else 0.0)
         
@@ -175,28 +185,32 @@ def extract_pl_dashboard(
         data['Indirect costs']['Total (including share trading)'] = data['6. Indirect Expense']['Total (including share trading)']
         
         # 5. Allocations (Factory, Office, Common)
-        # Factory Allocation: Factory costs (COGS + Indirect costs) divided by 3, allocated to Bluestreak, Clarus, IT
+        # Factory Allocation: Factory costs allocated to targeted verticals
         factory_cogs = data['Less: COGS']['Factory']
         factory_ind = data['Indirect costs']['Factory']
         factory_total_pool = factory_cogs + factory_ind
-        factory_share = factory_total_pool / 3.0
         
-        data['Factory']['Bluestreak'] = factory_share
-        data['Factory']['Clarus'] = factory_share
-        data['Factory']['IT'] = factory_share
+        factory_targets = ['Bluestreak', 'Clarus', 'IT']
+        factory_share = factory_total_pool / (len(factory_targets) or 1.0)
+        
+        for target in factory_targets:
+            data['Factory'][target] = factory_share
+            
         data['Factory']['Factory'] = -factory_total_pool
         data['Factory']['Total (without share trading)'] = 0.0
         data['Factory']['Total (including share trading)'] = 0.0
         
-        # Office Allocation: Office costs (COGS + Indirect costs) divided by 3, allocated to Bluestreak, Clarus, IT
+        # Office Allocation: Office costs allocated to targeted verticals
         office_cogs = data['Less: COGS']['Office']
         office_ind = data['Indirect costs']['Office']
         office_total_pool = office_cogs + office_ind
-        office_share = office_total_pool / 3.0
         
-        data['Office']['Bluestreak'] = office_share
-        data['Office']['Clarus'] = office_share
-        data['Office']['IT'] = office_share
+        office_targets = ['Bluestreak', 'Clarus', 'IT']
+        office_share = office_total_pool / (len(office_targets) or 1.0)
+        
+        for target in office_targets:
+            data['Office'][target] = office_share
+            
         data['Office']['Office'] = -office_total_pool
         data['Office']['Total (without share trading)'] = 0.0
         data['Office']['Total (including share trading)'] = 0.0
