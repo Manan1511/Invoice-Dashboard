@@ -178,38 +178,42 @@ def extract_pl_dashboard(
         # Factory Allocation: Factory costs (COGS + Indirect costs) divided by 3, allocated to Bluestreak, Clarus, IT
         factory_cogs = data['Less: COGS']['Factory']
         factory_ind = data['Indirect costs']['Factory']
-        factory_share = (factory_cogs + factory_ind) / 3.0
+        factory_total_pool = factory_cogs + factory_ind
+        factory_share = factory_total_pool / 3.0
         
         data['Factory']['Bluestreak'] = factory_share
         data['Factory']['Clarus'] = factory_share
         data['Factory']['IT'] = factory_share
-        data['Factory']['Total (without share trading)'] = factory_share * 3
-        data['Factory']['Total (including share trading)'] = factory_share * 3
+        data['Factory']['Factory'] = -factory_total_pool
+        data['Factory']['Total (without share trading)'] = 0.0
+        data['Factory']['Total (including share trading)'] = 0.0
         
         # Office Allocation: Office costs (COGS + Indirect costs) divided by 3, allocated to Bluestreak, Clarus, IT
         office_cogs = data['Less: COGS']['Office']
         office_ind = data['Indirect costs']['Office']
-        office_share = (office_cogs + office_ind) / 3.0
+        office_total_pool = office_cogs + office_ind
+        office_share = office_total_pool / 3.0
         
         data['Office']['Bluestreak'] = office_share
         data['Office']['Clarus'] = office_share
         data['Office']['IT'] = office_share
-        data['Office']['Total (without share trading)'] = office_share * 3
-        data['Office']['Total (including share trading)'] = office_share * 3
+        data['Office']['Office'] = -office_total_pool
+        data['Office']['Total (without share trading)'] = 0.0
+        data['Office']['Total (including share trading)'] = 0.0
         
         # Common Allocation: Common costs allocated proportionally to all revenue-generating verticals
         common_ind = data['Indirect costs']['Common']
-        total_sales_for_common = data['Sales']['Total (without share trading)'] or 1.0
         
         revenue_verticals = ['Bluestreak', 'Clarus', 'IT', 'Spices - A to Z', 'Spices - Vashi']
+        total_revenue_pool = sum(data['Sales'][v] for v in revenue_verticals) or 1.0
         
         # Allocate proportionally to ensure 100% distribution and no orphaned costs
         for v in revenue_verticals:
-            data['Common'][v] = common_ind * (data['Sales'][v] / total_sales_for_common)
+            data['Common'][v] = common_ind * (data['Sales'][v] / total_revenue_pool)
             
         data['Common']['Common'] = -common_ind
-        data['Common']['Total (without share trading)'] = sum(data['Common'][v] for v in operating_verticals)
-        data['Common']['Total (including share trading)'] = data['Common']['Total (without share trading)']
+        data['Common']['Total (without share trading)'] = 0.0
+        data['Common']['Total (including share trading)'] = 0.0
             
         # Total indirect costs
         for v in all_verticals:

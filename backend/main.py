@@ -379,7 +379,7 @@ async def _process_and_finalize_workbook(session_id: str):
         has_ytd = check_if_tb_has_ytd(entries)
         try:
             if not has_ytd:
-                entries = await asyncio.to_thread(roll_forward_ytd, entries, prior_path)
+                entries = await asyncio.to_thread(roll_forward_ytd, entries, prior_path, month)
             else:
                 for entry in entries:
                     if entry.opening_ytd is None:

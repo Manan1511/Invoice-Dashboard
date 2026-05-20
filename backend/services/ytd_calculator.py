@@ -19,7 +19,8 @@ def check_if_tb_has_ytd(parsed_entries: List[LedgerEntry]) -> bool:
 
 def roll_forward_ytd(
     current_entries: List[LedgerEntry], 
-    prior_workbook_path: Optional[str]
+    prior_workbook_path: Optional[str],
+    month: int
 ) -> List[LedgerEntry]:
     """Rolls forward YTD balances by adding current month values to prior month YTD values."""
     if not prior_workbook_path:
@@ -39,7 +40,7 @@ def roll_forward_ytd(
     prior_wb = openpyxl.load_workbook(prior_workbook_path, data_only=True)
     if 'List of Ledgers ' not in prior_wb.sheetnames:
         # Fallback to current values if sheet is missing
-        return roll_forward_ytd(current_entries, None)
+        return roll_forward_ytd(current_entries, None, month)
         
     prior_ws = prior_wb['List of Ledgers ']
     prior_ytd_data = {}
@@ -56,12 +57,23 @@ def roll_forward_ytd(
         cred_ytd = prior_ws.cell(row=r_idx, column=16).value
         clos_ytd = prior_ws.cell(row=r_idx, column=17).value
         
-        prior_ytd_data[name_clean] = {
-            "opening_ytd": _to_float(op_ytd),
-            "debit_ytd": _to_float(deb_ytd),
-            "credit_ytd": _to_float(cred_ytd),
-            "closing_ytd": _to_float(clos_ytd)
-        }
+        group_val = str(prior_ws.cell(row=r_idx, column=4).value or "").strip().upper()
+        
+        # If it's April (month 4) and this is a P&L account, reset prior YTD values to 0
+        if month == 4 and "P&L" in group_val:
+            prior_ytd_data[name_clean] = {
+                "opening_ytd": 0.0,
+                "debit_ytd": 0.0,
+                "credit_ytd": 0.0,
+                "closing_ytd": 0.0
+            }
+        else:
+            prior_ytd_data[name_clean] = {
+                "opening_ytd": _to_float(op_ytd),
+                "debit_ytd": _to_float(deb_ytd),
+                "credit_ytd": _to_float(cred_ytd),
+                "closing_ytd": _to_float(clos_ytd)
+            }
         
     for entry in current_entries:
         name_clean = entry.name.lower()
