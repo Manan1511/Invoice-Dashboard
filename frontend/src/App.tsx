@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Upload, FileText, ChevronRight, Download, RefreshCw, BarChart2, 
   PieChart, CheckCircle, AlertTriangle, ArrowUpRight, DollarSign, 
-  TrendingUp, Layers, HelpCircle, X, WifiOff
+  TrendingUp, Layers, HelpCircle, X, WifiOff, Edit2, Plus, Trash2, BookOpen
 } from 'lucide-react';
 import { 
   ResponsiveContainer, XAxis, YAxis, Tooltip, Legend, AreaChart, Area
@@ -37,6 +37,15 @@ interface DomainLists {
   heads: string[];
   verticals: string[];
   classifications: string[];
+}
+
+interface LedgerMappingRow {
+  ledger_name: string;
+  under: string | null;
+  group: string;
+  head: string;
+  classification: string | null;
+  vertical: string;
 }
 
 /** Typed error object to differentiate error categories for UX messaging */
@@ -125,20 +134,26 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 9
 }
 
 export default function App() {
-  // App Workflow Stages: 'UPLOAD' | 'MAPPING' | 'DASHBOARD'
-  const [stage, setStage] = useState<'UPLOAD' | 'MAPPING' | 'DASHBOARD'>('UPLOAD');
+  // App Workflow Stages: 'UPLOAD' | 'LEDGER_REVIEW' | 'MAPPING' | 'DASHBOARD'
+  const [stage, setStage] = useState<'UPLOAD' | 'LEDGER_REVIEW' | 'MAPPING' | 'DASHBOARD'>('UPLOAD');
   
   // Data States
   const [activeFile, setActiveFile] = useState<File | null>(null);
   const [priorFile, setPriorFile] = useState<File | null>(null);
+  const [ledgerFile, setLedgerFile] = useState<File | null>(null);
   const [month, setMonth] = useState<number>(3); // March
   const [year, setYear] = useState<number>(2026);
+
+  // Ledger Review State
+  const [ledgerSessionId, setLedgerSessionId] = useState<string>('');
+  const [reviewLedgers, setReviewLedgers] = useState<LedgerMappingRow[]>([]);
   
   // Loading & Error States
   const [loading, setLoading] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [appError, setAppError] = useState<AppError | null>(null);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null); // null = checking
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   
   // Session & Dynamic Data
   const [sessionId, setSessionId] = useState<string>("");
@@ -157,7 +172,7 @@ export default function App() {
     verticals: [],
     classifications: []
   });
-  
+
   const [plData, setPlData] = useState<PLDataResponse | null>(null);
   const [activeTab, setActiveTab] = useState<'MONTH' | 'YTD'>('MONTH');
 
@@ -307,15 +322,28 @@ export default function App() {
         onChange={e => {
           const val = e.target.value;
           if (val === "__NEW__") {
-            setCustomMode({
-              ...customMode,
-              [modeKey]: true
-            });
-            setCustomValues({
-              ...customValues,
-              [modeKey]: ""
+            setCustomMode({ ...customMode, [modeKey]: true });
+            setCustomValues({ ...customValues, [modeKey]: "" });
+          } else if (ledgerName.startsWith('__review__')) {
+            // LEDGER_REVIEW stage — update reviewLedgers array by index
+            const rowIdx = parseInt(ledgerName.replace('__review__', ''), 10);
+            setReviewLedgers(prev => {
+              const updated = [...prev];
+              if (columnKey === 'head') {
+                const isBS = val === 'Sundry Debtor' || val === 'Sundry Creditor';
+                updated[rowIdx] = {
+                  ...updated[rowIdx],
+                  head: val,
+                  group: isBS ? 'BS' : 'P&L',
+                  classification: isBS ? '' : (val === '1. Sales Accounts' ? 'Sales' : 'Misc Expenses')
+                };
+              } else {
+                updated[rowIdx] = { ...updated[rowIdx], [columnKey]: val };
+              }
+              return updated;
             });
           } else {
+            // MAPPING stage — update mappings dict by ledger name
             const rowVal = mappings[ledgerName] || {
               under: "Indirect Expenses",
               group: "P&L",
@@ -323,7 +351,6 @@ export default function App() {
               classification: "Misc Expenses",
               vertical: "Common"
             };
-            
             if (columnKey === 'head') {
               const isBS = val === "Sundry Debtor" || val === "Sundry Creditor";
               setMappings({
@@ -336,13 +363,7 @@ export default function App() {
                 }
               });
             } else {
-              setMappings({
-                ...mappings,
-                [ledgerName]: {
-                  ...rowVal,
-                  [columnKey]: val
-                }
-              });
+              setMappings({ ...mappings, [ledgerName]: { ...rowVal, [columnKey]: val } });
             }
           }
         }}
@@ -375,9 +396,224 @@ export default function App() {
       });
   }, []);
 
+  // Handle Ledger File Upload → parse and enter LEDGER_REVIEW stage
+  const handleLedgerUpload = async () => {
+    if (!ledgerFile) return;
+    setAppError(null);
+    setLoading(true);
+    setStatusMessage('Parsing List of Ledgers...');
+
+    const formData = new FormData();
+    formData.append('ledger_file', ledgerFile);
+
+    let res: Response | null = null;
+    try {
+      res = await fetchWithTimeout(`${API_BASE}/parse-ledgers`, { method: 'POST', body: formData }, 30_000);
+      if (!res.ok) {
+        setAppError(await parseApiError(res, null));
+        return;
+      }
+      const data = await res.json();
+      setLedgerSessionId(data.ledger_session_id);
+      // Map snake_case from API to camelCase-friendly interface (they match, so direct use)
+      setReviewLedgers(data.ledgers as LedgerMappingRow[]);
+      setStage('LEDGER_REVIEW');
+    } catch (err: unknown) {
+      setAppError(await parseApiError(res, err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle Ledger File Upload Directly without review
+  const handleLedgerDirectUpload = async () => {
+    if (!ledgerFile) return;
+    setAppError(null);
+    setSuccessMessage(null);
+    setLoading(true);
+    setStatusMessage('Uploading and applying List of Ledgers directly...');
+
+    const formData = new FormData();
+    formData.append('ledger_file', ledgerFile);
+
+    let res: Response | null = null;
+    try {
+      res = await fetchWithTimeout(`${API_BASE}/upload-ledgers-direct`, { method: 'POST', body: formData }, 60_000);
+      if (!res.ok) {
+        setAppError(await parseApiError(res, null));
+        return;
+      }
+      const data = await res.json();
+      setSuccessMessage(data.message || `Master template updated directly with ${data.saved_count} ledger entries.`);
+      setLedgerFile(null); // Clear selected ledger file after successful upload
+    } catch (err: unknown) {
+      setAppError(await parseApiError(res, err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle uploading a ledger list file in Stage 2 to auto-resolve mappings
+  const handleResolverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files ? e.target.files[0] : null;
+    if (!file) return;
+
+    // Validate resolver file
+    const fileError = validateFileSelection(file);
+    if (fileError) {
+      setAppError({ category: 'validation', title: 'Invalid Resolver File', message: fileError });
+      return;
+    }
+
+    setAppError(null);
+    setSuccessMessage(null);
+    setLoading(true);
+    setStatusMessage('Parsing Excel resolver list...');
+
+    const formData = new FormData();
+    formData.append('ledger_file', file);
+
+    let res: Response | null = null;
+    try {
+      res = await fetchWithTimeout(`${API_BASE}/parse-ledgers`, { method: 'POST', body: formData }, 30_000);
+      if (!res.ok) {
+        setAppError(await parseApiError(res, null));
+        return;
+      }
+      const data = await res.json();
+      const resolverLedgers = data.ledgers as LedgerMappingRow[];
+
+      // Build a lookup map of lowercased ledger name to mapping details
+      const resolverMap = new Map<string, LedgerMappingRow>();
+      resolverLedgers.forEach(row => {
+        if (row.ledger_name) {
+          resolverMap.set(row.ledger_name.trim().toLowerCase(), row);
+        }
+      });
+
+      // Match case-insensitively with active unmapped ledgers
+      let matchedCount = 0;
+      const updatedMappings = { ...mappings };
+
+      unmappedLedgers.forEach(ledgerName => {
+        const match = resolverMap.get(ledgerName.trim().toLowerCase());
+        if (match) {
+          updatedMappings[ledgerName] = {
+            under: match.under || 'Indirect Expenses',
+            group: match.group || 'P&L',
+            head: match.head || '6. Indirect Expense',
+            classification: match.classification || 'Misc Expenses',
+            vertical: match.vertical || 'Common'
+          };
+          matchedCount++;
+        }
+      });
+
+      setMappings(updatedMappings);
+      setSuccessMessage(`Automatically matched and populated ${matchedCount} out of ${unmappedLedgers.length} unmapped ledgers.`);
+      
+      // Clear input value so same file can be uploaded again if needed
+      e.target.value = '';
+    } catch (err: unknown) {
+      setAppError(await parseApiError(res, err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle confirming (possibly edited) ledger list → save permanently then continue to TB upload check
+  const handleLedgerConfirm = async () => {
+    if (reviewLedgers.length === 0) {
+      setAppError({
+        category: 'validation',
+        title: 'Empty Ledger List',
+        message: 'The ledger list cannot be empty. Add at least one entry before confirming.'
+      });
+      return;
+    }
+    setAppError(null);
+    setLoading(true);
+    setStatusMessage('Saving ledger list to master template...');
+
+    const formData = new FormData();
+    formData.append('ledger_session_id', ledgerSessionId);
+    formData.append('ledgers_data', JSON.stringify(reviewLedgers));
+
+    let res: Response | null = null;
+    try {
+      res = await fetchWithTimeout(`${API_BASE}/confirm-ledgers`, { method: 'POST', body: formData }, 30_000);
+      if (!res.ok) {
+        setAppError(await parseApiError(res, null));
+        return;
+      }
+      // Ledger saved — now proceed with the normal TB upload if a TB file is already selected
+      if (activeFile) {
+        setStage('UPLOAD');
+        // Trigger the upload flow as if the user clicked submit
+        await _runTBUpload();
+      } else {
+        // No TB selected yet — go back to upload so user can select it
+        setStage('UPLOAD');
+      }
+    } catch (err: unknown) {
+      setAppError(await parseApiError(res, err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** Core TB upload logic, extracted so it can be called from both submit handler and post-ledger-confirm */
+  const _runTBUpload = async () => {
+    if (!activeFile) return;
+    setAppError(null);
+    setLoading(true);
+    setStatusMessage('Uploading and parsing Trial Balance data...');
+
+    const formData = new FormData();
+    formData.append('file', activeFile);
+    if (priorFile) formData.append('prior_file', priorFile);
+    formData.append('month', month.toString());
+    formData.append('year', year.toString());
+
+    let res: Response | null = null;
+    try {
+      res = await fetchWithTimeout(`${API_BASE}/upload`, { method: 'POST', body: formData }, 120_000);
+      if (!res.ok) {
+        setAppError(await parseApiError(res, null));
+        return;
+      }
+      const data = await res.json();
+      setSessionId(data.session_id);
+
+      if (data.success === false) {
+        setUnmappedLedgers(data.unmapped_ledgers);
+        const initialMappings: typeof mappings = {};
+        data.unmapped_ledgers.forEach((name: string) => {
+          initialMappings[name] = {
+            under: 'Indirect Expenses',
+            group: 'P&L',
+            head: '6. Indirect Expense',
+            classification: 'Misc Expenses',
+            vertical: 'Common'
+          };
+        });
+        setMappings(initialMappings);
+        setStage('MAPPING');
+      } else {
+        setPlData(data.pl_data);
+        setStage('DASHBOARD');
+      }
+    } catch (err: unknown) {
+      setAppError(await parseApiError(res, err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Handle Monthly File Upload
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSuccessMessage(null);
     if (!activeFile) {
       setAppError({ category: 'validation', title: 'No File Selected', message: 'Please select the active monthly Trial Balance file before proceeding.' });
       return;
@@ -396,58 +632,19 @@ export default function App() {
         return;
       }
     }
-    
-    setAppError(null);
-    setLoading(true);
-    setStatusMessage("Uploading and parsing Trial Balance data...");
-    
-    const formData = new FormData();
-    formData.append("file", activeFile);
-    if (priorFile) {
-      formData.append("prior_file", priorFile);
-    }
-    formData.append("month", month.toString());
-    formData.append("year", year.toString());
-    
-    let res: Response | null = null;
-    try {
-      res = await fetchWithTimeout(`${API_BASE}/upload`, { method: "POST", body: formData }, 120_000);
-      
-      if (!res.ok) {
-        setAppError(await parseApiError(res, null));
+    if (ledgerFile) {
+      const ledgerFileError = validateFileSelection(ledgerFile);
+      if (ledgerFileError) {
+        setAppError({ category: 'validation', title: 'Invalid Ledger File', message: ledgerFileError });
         return;
       }
-
-      const data = await res.json();
-      setSessionId(data.session_id);
-      
-      if (data.success === false) {
-        // Unmapped ledgers detected! Redirect to mapping form
-        setUnmappedLedgers(data.unmapped_ledgers);
-        
-        // Initialize default mappings for the unmapped ledgers
-        const initialMappings: typeof mappings = {};
-        data.unmapped_ledgers.forEach((name: string) => {
-          initialMappings[name] = {
-            under: "Indirect Expenses",
-            group: "P&L",
-            head: "6. Indirect Expense",
-            classification: "Misc Expenses",
-            vertical: "Common"
-          };
-        });
-        setMappings(initialMappings);
-        setStage('MAPPING');
-      } else {
-        // Perfect import, go straight to dashboard!
-        setPlData(data.pl_data);
-        setStage('DASHBOARD');
-      }
-    } catch (err: unknown) {
-      setAppError(await parseApiError(res, err));
-    } finally {
-      setLoading(false);
+      // If a ledger file is provided, parse it first → LEDGER_REVIEW stage
+      await handleLedgerUpload();
+      return;
     }
+
+    // No ledger file — proceed directly with TB upload
+    await _runTBUpload();
   };
 
   // Submit Mappings form to backend
@@ -622,6 +819,24 @@ export default function App() {
         </div>
       )}
 
+      {/* Success Banner */}
+      {successMessage && (
+        <div style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: '12px', padding: '0.85rem 1.25rem', display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }} className="animate-fadeIn">
+          <CheckCircle size={18} style={{ color: 'var(--accent-emerald)', flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <span style={{ color: 'white', fontWeight: '600', fontSize: '0.875rem' }}>Success!</span>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginLeft: '0.5rem' }}>{successMessage}</span>
+          </div>
+          <button
+            onClick={() => setSuccessMessage(null)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '2px', borderRadius: '4px', flexShrink: 0 }}
+            title="Dismiss"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
       {/* Global Processing Loader Panel */}
       {loading && (
         <div className="loader-overlay">
@@ -699,14 +914,14 @@ export default function App() {
               </div>
 
               {/* Uploader: Prior Month Workbook */}
-              <div className="form-group" style={{ marginBottom: '2rem' }}>
+              <div className="form-group" style={{ marginBottom: '1.5rem' }}>
                 <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span>2. Prior Month Workbook (Optional)</span>
                   <span style={{ fontSize: '0.7rem', color: 'var(--accent-emerald)', background: 'rgba(16, 185, 129, 0.1)', padding: '0.1rem 0.5rem', borderRadius: '10px' }}>Enables YTD Roll-forward</span>
                 </label>
                 <div className="drop-zone">
-                  <input 
-                    type="file" 
+                  <input
+                    type="file"
                     accept=".xlsx,.xls"
                     onChange={e => setPriorFile(e.target.files ? e.target.files[0] : null)}
                   />
@@ -729,10 +944,71 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Submit Trigger */}
-              <button type="submit" className="btn-primary" style={{ width: '100%', padding: '1.1rem' }}>
-                Proceed to Mapping Check <ChevronRight size={18} />
-              </button>
+              {/* Uploader: Custom List of Ledgers */}
+              <div className="form-group" style={{ marginBottom: '2rem' }}>
+                <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>3. List of Ledgers (Optional)</span>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--accent-gold)', background: 'rgba(234, 179, 8, 0.1)', padding: '0.1rem 0.5rem', borderRadius: '10px' }}>Replaces Master Template</span>
+                </label>
+                <div className="drop-zone" style={{ borderColor: ledgerFile ? 'var(--accent-gold)' : undefined }}>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={e => setLedgerFile(e.target.files ? e.target.files[0] : null)}
+                  />
+                  <div className="drop-zone-content">
+                    <div className="drop-icon-wrapper" style={{ color: 'var(--accent-gold)' }}>
+                      <BookOpen size={28} />
+                    </div>
+                    {ledgerFile ? (
+                      <div>
+                        <p className="drop-zone-title" style={{ color: 'white' }}>{ledgerFile.name}</p>
+                        <p className="drop-zone-desc">{(ledgerFile.size / (1024 * 1024)).toFixed(2)} MB — will be reviewed before saving</p>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="drop-zone-title">Upload your own MIS List of Ledgers</p>
+                        <p className="drop-zone-desc">Must contain a 'List of Ledgers' sheet with columns: Ledger Name, Group, Head, Classification, Vertical</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {ledgerFile && (
+                  <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.78rem', color: 'var(--accent-gold)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <Edit2 size={12} /> You'll review and edit this list before it's saved permanently.
+                  </p>
+                )}
+              </div>
+
+              {/* Submit Trigger / Dual-action ledger choice */}
+              {ledgerFile ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', background: 'rgba(255, 255, 255, 0.02)', padding: '1.25rem', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)', marginTop: '1.5rem' }} className="animate-fadeIn">
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '0 0 0.5rem 0', fontWeight: '500', textAlign: 'left' }}>
+                    Choose how to apply the custom List of Ledgers:
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={handleLedgerDirectUpload}
+                      style={{ padding: '0.875rem' }}
+                    >
+                      <CheckCircle size={16} /> Apply Directly
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn-secondary"
+                      style={{ padding: '0.875rem' }}
+                    >
+                      <Edit2 size={16} /> Review & Edit First
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button type="submit" className="btn-primary" style={{ width: '100%', padding: '1.1rem', marginTop: '1.5rem' }}>
+                  Proceed to Mapping Check <ChevronRight size={18} />
+                </button>
+              )}
             </form>
           </div>
 
@@ -775,6 +1051,155 @@ export default function App() {
         </div>
       )}
 
+      {/* ==================== STAGE 1.5: LEDGER REVIEW ==================== */}
+      {stage === 'LEDGER_REVIEW' && (
+        <div className="glass-panel w-full animate-fadeIn">
+          <div className="mapping-header">
+            <div>
+              <h2 className="mapping-title">
+                <BookOpen size={22} style={{ color: 'var(--accent-gold)' }} /> Review List of Ledgers
+              </h2>
+              <p className="mapping-subtitle">
+                Loaded <span style={{ color: 'var(--accent-gold)', fontWeight: '600' }}>{reviewLedgers.length} ledger entries</span> from your file.
+                Edit any row below — then click <strong>Save &amp; Continue</strong> to permanently update the master template and proceed.
+              </p>
+            </div>
+            <button
+              onClick={() => { setLedgerFile(null); setReviewLedgers([]); setSuccessMessage(null); setStage('UPLOAD'); }}
+              className="btn-secondary btn-sm"
+            >
+              Cancel &amp; Start Over
+            </button>
+          </div>
+
+          <div className="table-container" style={{ maxHeight: '55vh', overflowY: 'auto' }}>
+            <table className="mapping-table">
+              <thead>
+                <tr>
+                  <th style={{ minWidth: '200px' }}>Ledger Name</th>
+                  <th style={{ width: '200px' }}>Accounting Head</th>
+                  <th style={{ width: '120px' }}>Group</th>
+                  <th style={{ width: '220px' }}>Classification</th>
+                  <th style={{ width: '180px' }}>Vertical</th>
+                  <th style={{ width: '44px' }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {reviewLedgers.map((row, idx) => (
+                  <tr key={idx}>
+                    {/* Ledger Name — editable inline */}
+                    <td>
+                      <input
+                        type="text"
+                        className="form-input"
+                        style={{ width: '100%', padding: '0.4rem 0.5rem', fontSize: '0.82rem', height: '34px' }}
+                        value={row.ledger_name}
+                        onChange={e => {
+                          const updated = [...reviewLedgers];
+                          updated[idx] = { ...updated[idx], ledger_name: e.target.value };
+                          setReviewLedgers(updated);
+                        }}
+                      />
+                    </td>
+                    {/* Head dropdown */}
+                    <td>
+                      {renderCellDropdown(
+                        `__review__${idx}`,
+                        'head',
+                        row.head,
+                        domainLists.heads,
+                        false
+                      )}
+                    </td>
+                    {/* Group dropdown */}
+                    <td>
+                      {renderCellDropdown(
+                        `__review__${idx}`,
+                        'group',
+                        row.group,
+                        domainLists.groups,
+                        false
+                      )}
+                    </td>
+                    {/* Classification dropdown */}
+                    <td>
+                      {renderCellDropdown(
+                        `__review__${idx}`,
+                        'classification',
+                        row.classification ?? '',
+                        row.head === '1. Sales Accounts' ? ['Sales'] :
+                        row.head === '5. Purchase Accounts' ? ['Purchase'] :
+                        domainLists.classifications,
+                        row.head === 'Sundry Debtor' || row.head === 'Sundry Creditor'
+                      )}
+                    </td>
+                    {/* Vertical dropdown */}
+                    <td>
+                      {renderCellDropdown(
+                        `__review__${idx}`,
+                        'vertical',
+                        row.vertical,
+                        domainLists.verticals,
+                        false
+                      )}
+                    </td>
+                    {/* Delete row */}
+                    <td style={{ textAlign: 'center' }}>
+                      <button
+                        type="button"
+                        title="Remove this ledger"
+                        onClick={() => setReviewLedgers(reviewLedgers.filter((_, i) => i !== idx))}
+                        style={{
+                          background: 'rgba(239,68,68,0.08)',
+                          border: '1px solid rgba(239,68,68,0.2)',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          color: '#ef4444',
+                          padding: '0.3rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Add new ledger row */}
+          <div style={{ marginTop: '0.75rem' }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem 1rem', fontSize: '0.85rem' }}
+              onClick={() => setReviewLedgers([...reviewLedgers, {
+                ledger_name: 'New Ledger',
+                under: null,
+                group: 'P&L',
+                head: '6. Indirect Expense',
+                classification: 'Misc Expenses',
+                vertical: 'Common'
+              }])}
+            >
+              <Plus size={14} /> Add New Ledger Row
+            </button>
+          </div>
+
+          <button
+            type="button"
+            className="btn-primary"
+            style={{ width: '100%', padding: '1.1rem', marginTop: '1.5rem' }}
+            onClick={handleLedgerConfirm}
+          >
+            <CheckCircle size={18} /> Save Permanently &amp; Continue
+          </button>
+        </div>
+      )}
+
       {/* ==================== STAGE 2: MAPPING UI ==================== */}
       {stage === 'MAPPING' && (
         <div className="glass-panel w-full animate-fadeIn">
@@ -787,12 +1212,40 @@ export default function App() {
                 The trial balance contains <span style={{ color: 'var(--accent-gold)', fontWeight: '600' }}>{unmappedLedgers.length} new ledger accounts</span> that aren't defined in the master mapping database. Define them below to proceed.
               </p>
             </div>
-            <button onClick={() => setStage('UPLOAD')} className="btn-secondary btn-sm">
+            <button onClick={() => { setSuccessMessage(null); setStage('UPLOAD'); }} className="btn-secondary btn-sm">
               Cancel & Start Over
             </button>
           </div>
 
           <form onSubmit={handleMappingSubmit}>
+            {/* Resolve mappings via Excel resolver */}
+            <div style={{ background: 'rgba(245, 158, 11, 0.03)', border: '1px dashed rgba(245, 158, 11, 0.25)', borderRadius: '12px', padding: '1rem 1.5rem', marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="animate-fadeIn">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', textAlign: 'left' }}>
+                  <div style={{ padding: '0.5rem', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.1)', color: 'var(--accent-gold)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <BookOpen size={18} />
+                  </div>
+                  <div>
+                    <span style={{ color: 'white', fontWeight: '600', fontSize: '0.85rem' }}>Bulk Resolve via Excel List</span>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', margin: 0 }}>
+                      Drop a master ledger list Excel workbook to instantly auto-populate matches below.
+                    </p>
+                  </div>
+                </div>
+                <div style={{ position: 'relative' }}>
+                  <button type="button" className="btn-secondary btn-sm" style={{ borderColor: 'rgba(234, 179, 8, 0.3)', pointerEvents: 'none' }}>
+                    Choose Resolver File
+                  </button>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleResolverUpload}
+                    style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%' }}
+                  />
+                </div>
+              </div>
+            </div>
+
             <div className="table-container">
               <table className="mapping-table">
                 <thead>
