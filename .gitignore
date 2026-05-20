@@ -11,6 +11,9 @@ backend/uploads/
 workbooks/
 backend/workbooks/
 
+# Temporary scratchpad for debugging scripts and outputs
+scratch/
+
 # Ignore user Excel data exports / temp lock files
 *.xlsx
 !templates/*.xlsx
