@@ -7,6 +7,10 @@ class LedgerEntry(BaseModel):
     debit: Optional[float] = None
     credit: Optional[float] = None
     closing: Optional[float] = None
+    opening_net: Optional[float] = None
+    debit_net: Optional[float] = None
+    credit_net: Optional[float] = None
+    closing_net: Optional[float] = None
     opening_ytd: Optional[float] = None
     debit_ytd: Optional[float] = None
     credit_ytd: Optional[float] = None

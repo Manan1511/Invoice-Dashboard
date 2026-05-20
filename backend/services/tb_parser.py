@@ -67,6 +67,11 @@ def _parse_sheet_rows(sheet, is_ytd: bool) -> Dict[str, LedgerEntry]:
     closing_col = 5
     
     # If YTD, check if YTD values are in cols 7-10 (standard in sheet: Opening YTD, Debit YTD, etc.)
+    opening_net_col = 7
+    debit_net_col = 8
+    credit_net_col = 9
+    closing_net_col = 10
+
     if is_ytd:
         # Let's inspect column names in row
         for c_idx, col_name in enumerate(cols, start=1):
@@ -79,6 +84,18 @@ def _parse_sheet_rows(sheet, is_ytd: bool) -> Dict[str, LedgerEntry]:
                 credit_col = c_idx
             elif 'closing ytd' in col_lower or ('closing' in col_lower and c_idx >= 7):
                 closing_col = c_idx
+    else:
+        for c_idx, col_name in enumerate(cols, start=1):
+            col_lower = col_name.lower()
+            if c_idx >= 7:
+                if col_lower == 'opening':
+                    opening_net_col = c_idx
+                elif col_lower == 'debit':
+                    debit_net_col = c_idx
+                elif col_lower == 'credit':
+                    credit_net_col = c_idx
+                elif col_lower == 'closing':
+                    closing_net_col = c_idx
 
     # Parse rows below the header
     for r_idx in range(header_row_idx + 1, sheet.max_row + 1):
@@ -94,11 +111,10 @@ def _parse_sheet_rows(sheet, is_ytd: bool) -> Dict[str, LedgerEntry]:
         cred_val = _clean_float(sheet.cell(row=r_idx, column=credit_col).value)
         clos_val = _clean_float(sheet.cell(row=r_idx, column=closing_col).value)
         
-        # Skip if all values are None/Zero
-        if not any([op_val, deb_val, cred_val, clos_val]):
-            continue
-            
         if is_ytd:
+            # Skip if all values are None/Zero
+            if not any([op_val, deb_val, cred_val, clos_val]):
+                continue
             entries[ledger_name] = LedgerEntry(
                 name=ledger_name,
                 opening_ytd=op_val,
@@ -107,12 +123,25 @@ def _parse_sheet_rows(sheet, is_ytd: bool) -> Dict[str, LedgerEntry]:
                 closing_ytd=clos_val
             )
         else:
+            op_net = _clean_float(sheet.cell(row=r_idx, column=opening_net_col).value)
+            deb_net = _clean_float(sheet.cell(row=r_idx, column=debit_net_col).value)
+            cred_net = _clean_float(sheet.cell(row=r_idx, column=credit_net_col).value)
+            clos_net = _clean_float(sheet.cell(row=r_idx, column=closing_net_col).value)
+            
+            # Skip if all values are None/Zero
+            if not any([op_val, deb_val, cred_val, clos_val, op_net, deb_net, cred_net, clos_net]):
+                continue
+                
             entries[ledger_name] = LedgerEntry(
                 name=ledger_name,
                 opening=op_val,
                 debit=deb_val,
                 credit=cred_val,
-                closing=clos_val
+                closing=clos_val,
+                opening_net=op_net,
+                debit_net=deb_net,
+                credit_net=cred_net,
+                closing_net=clos_net
             )
             
     return entries

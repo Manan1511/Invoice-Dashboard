@@ -23,16 +23,16 @@ def roll_forward_ytd(
 ) -> List[LedgerEntry]:
     """Rolls forward YTD balances by adding current month values to prior month YTD values."""
     if not prior_workbook_path:
-        # No prior month workbook provided, initialize YTD values with current month values (e.g. if it's the first month)
+        # No prior month workbook provided, initialize YTD values with current month net signed values (e.g. if it's the first month)
         for entry in current_entries:
             if entry.opening_ytd is None:
-                entry.opening_ytd = entry.opening or 0.0
+                entry.opening_ytd = entry.opening_net if entry.opening_net is not None else (entry.opening or 0.0)
             if entry.debit_ytd is None:
-                entry.debit_ytd = entry.debit or 0.0
+                entry.debit_ytd = entry.debit_net if entry.debit_net is not None else (entry.debit or 0.0)
             if entry.credit_ytd is None:
-                entry.credit_ytd = entry.credit or 0.0
+                entry.credit_ytd = entry.credit_net if entry.credit_net is not None else (entry.credit or 0.0)
             if entry.closing_ytd is None:
-                entry.closing_ytd = entry.closing or 0.0
+                entry.closing_ytd = entry.closing_net if entry.closing_net is not None else (entry.closing or 0.0)
         return current_entries
 
     # Load prior month YTD values from its 'List of Ledgers ' sheet
@@ -80,16 +80,15 @@ def roll_forward_ytd(
         # Opening YTD (April 1st) remains the same throughout the fiscal year
         entry.opening_ytd = prior_vals["opening_ytd"]
         
-        # YTD Debit = Prior YTD Debit + Current Month Debit
-        cur_deb = entry.debit or 0.0
+        # YTD Debit = Prior YTD Debit + Current Month Debit (signed net)
+        cur_deb = entry.debit_net if entry.debit_net is not None else (entry.debit or 0.0)
         entry.debit_ytd = prior_vals["debit_ytd"] + cur_deb
         
-        # YTD Credit = Prior YTD Credit + Current Month Credit
-        cur_cred = entry.credit or 0.0
+        # YTD Credit = Prior YTD Credit + Current Month Credit (signed net)
+        cur_cred = entry.credit_net if entry.credit_net is not None else (entry.credit or 0.0)
         entry.credit_ytd = prior_vals["credit_ytd"] + cur_cred
         
-        # Calculate YTD Closing
-        # We can calculate closing as opening_ytd + debit_ytd - credit_ytd
+        # Calculate YTD Closing (signed net)
         entry.closing_ytd = entry.opening_ytd + entry.debit_ytd - entry.credit_ytd
         
     return current_entries

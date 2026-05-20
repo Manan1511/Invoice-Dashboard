@@ -248,7 +248,8 @@ async def upload_files(
     file: UploadFile = File(...),
     prior_file: Optional[UploadFile] = File(None),
     month: int = Form(3),
-    year: int = Form(2026)
+    year: int = Form(2026),
+    closing_stock: float = Form(0.0)
 ):
     """Handles uploading monthly TB file and optional prior month workbook."""
     # 1. Validate uploaded files before doing anything
@@ -308,7 +309,8 @@ async def upload_files(
         "prior_file_path": prior_file_path,
         "parsed_entries": parsed_entries,
         "month": month,
-        "year": year
+        "year": year,
+        "closing_stock": closing_stock
     }
 
     if len(unmapped_ledgers) > 0:
@@ -361,13 +363,13 @@ async def _process_and_finalize_workbook(session_id: str):
         else:
             for entry in entries:
                 if entry.opening_ytd is None:
-                    entry.opening_ytd = entry.opening or 0.0
+                    entry.opening_ytd = entry.opening_net if entry.opening_net is not None else (entry.opening or 0.0)
                 if entry.debit_ytd is None:
-                    entry.debit_ytd = entry.debit or 0.0
+                    entry.debit_ytd = entry.debit_net if entry.debit_net is not None else (entry.debit or 0.0)
                 if entry.credit_ytd is None:
-                    entry.credit_ytd = entry.credit or 0.0
+                    entry.credit_ytd = entry.credit_net if entry.credit_net is not None else (entry.credit or 0.0)
                 if entry.closing_ytd is None:
-                    entry.closing_ytd = entry.closing or 0.0
+                    entry.closing_ytd = entry.closing_net if entry.closing_net is not None else (entry.closing or 0.0)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -378,7 +380,14 @@ async def _process_and_finalize_workbook(session_id: str):
     output_filename = f"MIS_Report_{year}_{month:02d}.xlsx"
     output_path = os.path.join(OUTPUT_DIR, output_filename)
     try:
-        generate_monthly_workbook(entries, active_path, output_path)
+        generate_monthly_workbook(
+            parsed_entries=entries,
+            uploaded_file_path=active_path,
+            output_path=output_path,
+            month=month,
+            year=year,
+            closing_stock=session.get("closing_stock", 0.0)
+        )
     except FileNotFoundError:
         raise HTTPException(
             status_code=500,
@@ -403,7 +412,8 @@ async def _process_and_finalize_workbook(session_id: str):
             entries,
             month_label,
             ytd_label,
-            has_ytd=(has_ytd or prior_path is not None)
+            has_ytd=(has_ytd or prior_path is not None),
+            closing_stock=session.get("closing_stock", 0.0)
         )
     except Exception as e:
         raise HTTPException(

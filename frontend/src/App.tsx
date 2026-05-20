@@ -143,6 +143,7 @@ export default function App() {
   const [ledgerFile, setLedgerFile] = useState<File | null>(null);
   const [month, setMonth] = useState<number>(3); // March
   const [year, setYear] = useState<number>(2026);
+  const [closingStock, setClosingStock] = useState<string>('');
 
   // Ledger Review State
   const [ledgerSessionId, setLedgerSessionId] = useState<string>('');
@@ -584,6 +585,7 @@ export default function App() {
     if (priorFile) formData.append('prior_file', priorFile);
     formData.append('month', month.toString());
     formData.append('year', year.toString());
+    formData.append('closing_stock', closingStock || '0');
 
     let res: Response | null = null;
     try {
@@ -886,7 +888,7 @@ export default function App() {
 
             <form onSubmit={handleUploadSubmit}>
               {/* Date & Period Fields */}
-              <div className="form-row" style={{ marginBottom: '1.5rem' }}>
+              <div className="form-row" style={{ marginBottom: '1.5rem', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
                 <div className="form-group">
                   <label className="form-label">Report Month</label>
                   <select 
@@ -906,6 +908,17 @@ export default function App() {
                     value={year}
                     onChange={e => setYear(parseInt(e.target.value))}
                     className="form-input"
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Closing Stock (₹)</label>
+                  <input 
+                    type="number" 
+                    placeholder="e.g. 2500000"
+                    value={closingStock}
+                    onChange={e => setClosingStock(e.target.value)}
+                    className="form-input"
+                    style={{ borderColor: closingStock ? 'var(--accent-emerald)' : undefined }}
                   />
                 </div>
               </div>

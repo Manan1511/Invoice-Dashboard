@@ -8,7 +8,8 @@ def extract_pl_dashboard(
     parsed_entries: List[LedgerEntry],
     month_label: str = "Mar'26",
     ytd_label: str = "YTD'26",
-    has_ytd: bool = True
+    has_ytd: bool = True,
+    closing_stock: float = 0.0
 ) -> PLDataResponse:
     """Calculates and extracts the P&L breakdown dynamically in Python based on ledger mappings and balances."""
     # 1. Load active mappings
@@ -65,8 +66,12 @@ def extract_pl_dashboard(
         # Head mappings:
         # Sales & Indirect Income are credit balances (credit balance is negative closing in parsed entry, so we do -entry.closing)
         # Expenses & Purchases are debit balances (debit balance is positive closing)
-        val_month = abs(entry.closing or 0.0)
-        val_ytd = abs(entry.closing_ytd or 0.0)
+        val_month = entry.closing if entry.closing is not None else 0.0
+        val_ytd = entry.closing_ytd if entry.closing_ytd is not None else 0.0
+        
+        if mapping.head in {"1. Sales Accounts", "2. Indirect Income"}:
+            val_month = -val_month
+            val_ytd = -val_ytd
         
         if mapping.head == "1. Sales Accounts":
             m_sales, y_sales = get_or_create_line('Sales')
@@ -124,7 +129,8 @@ def extract_pl_dashboard(
             # If vertical is Factory, we can include stock change
             stock_change = 0.0
             if v == 'Factory':
-                stock_change = (op_stock_m or 0.0) - (cl_stock_m or 0.0)
+                final_cl_stock = closing_stock if closing_stock > 0 else (cl_stock_m or 0.0)
+                stock_change = (op_stock_m or 0.0) - final_cl_stock
             data['Less: COGS'][v] = purch + stock_change
             
         # Totals for Sales, COGS, Direct Expense (without share trading)
