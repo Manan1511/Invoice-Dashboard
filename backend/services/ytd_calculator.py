@@ -23,7 +23,7 @@ def roll_forward_ytd(
     month: int
 ) -> List[LedgerEntry]:
     """Rolls forward YTD balances by adding current month values to prior month YTD values."""
-    from services.ledger_mapper import load_mapped_ledgers
+    from services.ledger_mapper import load_mapped_ledgers, clean_ledger_name
     active_mappings = load_mapped_ledgers()
     if not prior_workbook_path:
         # No prior month workbook provided, initialize YTD values with current month net signed values (e.g. if it's the first month)
@@ -52,7 +52,7 @@ def roll_forward_ytd(
         name = prior_ws.cell(row=r_idx, column=2).value
         if not name:
             continue
-        name_clean = str(name).strip().lower()
+        name_clean = clean_ledger_name(name)
         
         op_ytd = prior_ws.cell(row=r_idx, column=14).value
         deb_ytd = prior_ws.cell(row=r_idx, column=15).value
@@ -103,7 +103,7 @@ def roll_forward_ytd(
             }
         
     for entry in current_entries:
-        name_clean = entry.name.lower()
+        name_clean = clean_ledger_name(entry.name)
         
         # If YTD values are already parsed from TB YTD and valid, keep them!
         if entry.debit_ytd is not None or entry.credit_ytd is not None:

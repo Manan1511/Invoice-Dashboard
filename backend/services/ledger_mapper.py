@@ -1,5 +1,6 @@
 import openpyxl
 import os
+import unicodedata
 from typing import List, Dict, Optional
 from models.ledger import LedgerMapping, LedgerEntry
 
@@ -8,6 +9,25 @@ TEMPLATE_PATH = os.path.join(BASE_DIR, "templates", "MIS_template.xlsx")
 
 # Required column headers that must be present in a valid List of Ledgers sheet
 _REQUIRED_HEADER_KEYWORDS = {"ledger", "group", "head", "vertical"}
+
+
+def clean_ledger_name(name) -> str:
+    """
+    Standardizes ledger names to be immune to invisible whitespace,
+    non-breaking spaces, quotation marks, and case sensitivity.
+    """
+    if not name:
+        return ""
+    # 1. Convert to string and strip normal whitespace
+    s = str(name).strip()
+    # 2. Remove invisible non-breaking spaces and other control chars
+    s = unicodedata.normalize("NFKD", s)
+    # 3. Remove surrounding quotes if present
+    s = s.strip('"').strip("'")
+    # 4. Strip again in case quotes had spaces
+    s = s.strip()
+    # 5. Normalize case for comparison
+    return s.lower()
 
 
 def _parse_ledger_sheet(ws) -> List[LedgerMapping]:
@@ -91,7 +111,7 @@ def load_mapped_ledgers(path: Optional[str] = None) -> Dict[str, LedgerMapping]:
     """
     Loads existing ledger mappings from the List of Ledgers sheet.
     If `path` is provided, reads from that file; otherwise falls back to the master template.
-    Returns a dict keyed by lowercased ledger name for fast lookups.
+    Returns a dict keyed by cleaned, standardized ledger name for fast lookups.
     """
     source_path = path if path else TEMPLATE_PATH
     wb = openpyxl.load_workbook(source_path, data_only=True)
@@ -113,7 +133,7 @@ def load_mapped_ledgers(path: Optional[str] = None) -> Dict[str, LedgerMapping]:
     finally:
         wb.close()
 
-    return {m.ledger_name.lower(): m for m in mappings_list}
+    return {clean_ledger_name(m.ledger_name): m for m in mappings_list}
 
 
 def parse_ledger_file(file_path: str) -> List[LedgerMapping]:
@@ -161,10 +181,10 @@ def get_unmapped_ledgers(
     mapped = load_mapped_ledgers(path=ledger_path)
     unmapped = []
     for entry in parsed_entries:
-        name_lower = entry.name.lower()
-        if not entry.name or entry.name.startswith(("Total", "Opening", "Closing")) or name_lower == "particulars":
+        name_clean = clean_ledger_name(entry.name)
+        if not entry.name or entry.name.startswith(("Total", "Opening", "Closing")) or name_clean == "particulars":
             continue
-        if name_lower not in mapped:
+        if name_clean not in mapped:
             unmapped.append(entry.name)
     return unmapped
 

@@ -2,7 +2,7 @@ import openpyxl
 from typing import List, Dict, Optional, Any
 from models.ledger import LedgerMapping, LedgerEntry
 from models.pl_data import PLDataResponse, PLBreakdown, PLRow
-from services.ledger_mapper import load_mapped_ledgers
+from services.ledger_mapper import load_mapped_ledgers, clean_ledger_name
 
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -36,13 +36,12 @@ def extract_pl_dashboard(
     Calculates P&L breakdown and dynamic shared cost allocations based solely on mapping metadata.
     """
     # 1. Load and clean active mappings
-    raw_mappings = load_mapped_ledgers()
-    mappings: Dict[str, LedgerMapping] = {k.strip().lower(): v for k, v in raw_mappings.items()}
+    mappings = load_mapped_ledgers()
 
     # CRITICAL ERROR TRAP: Detect non-zero balance ledgers that are not mapped
     for entry in parsed_entries:
-        name_lower = entry.name.lower().strip()
-        if name_lower in {"particulars", "grand total", "total", "grand", "net profit", "net loss"}:
+        name_clean = clean_ledger_name(entry.name)
+        if name_clean in {"particulars", "grand total", "total", "grand", "net profit", "net loss"}:
             continue
 
         # Check if ledger has non-zero balance
@@ -52,7 +51,7 @@ def extract_pl_dashboard(
                 has_balance = True
                 break
 
-        if has_balance and name_lower not in mappings:
+        if has_balance and name_clean not in mappings:
             raise ValueError(
                 f"CRITICAL ERROR: Ledger '{entry.name}' has a non-zero balance in the Trial Balance "
                 f"but is NOT mapped in your List of Ledgers mapping file! Please map this ledger first."
@@ -158,10 +157,11 @@ def extract_pl_dashboard(
     ytd_data['1. Sales Accounts'] = {col: Decimal('0.00') for col in all_cols}
 
     # Aggregate ledger entries
-    entries_map = {e.name.lower().strip(): e for e in parsed_entries}
+    # Aggregate ledger entries using clean_ledger_name for standard matching
+    entries_map = {clean_ledger_name(e.name): e for e in parsed_entries}
 
-    for ledger_name_lower, mapping in mappings.items():
-        entry = entries_map.get(ledger_name_lower)
+    for ledger_name_clean, mapping in mappings.items():
+        entry = entries_map.get(ledger_name_clean)
         if not entry:
             continue
 
@@ -348,11 +348,11 @@ def extract_pl_dashboard(
     creditor_map = {}
 
     for entry in parsed_entries:
-        name_lower = entry.name.lower().strip()
-        if name_lower in {"particulars", "grand total", "total", "grand", "net profit", "net loss"}:
+        name_clean = clean_ledger_name(entry.name)
+        if name_clean in {"particulars", "grand total", "total", "grand", "net profit", "net loss"}:
             continue
 
-        mapping = mappings.get(name_lower)
+        mapping = mappings.get(name_clean)
         if not mapping:
             continue
 
