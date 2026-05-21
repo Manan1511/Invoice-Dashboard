@@ -82,7 +82,9 @@ def parse_trial_balance(tb_path: str, config: CompanyConfiguration) -> Dict[str,
         consecutive_empty = 0
         
         clean_name = strict_normalize_ledger_name(raw_name)
-        if not clean_name or clean_name in FOOTER_EXCLUSIONS:
+        if clean_name == 'opening stock':
+            pass
+        elif not clean_name or clean_name in FOOTER_EXCLUSIONS:
             continue
             
         op_val = clean_decimal_value(tb_sheet.cell(row=r_idx, column=opening_col).value)
@@ -93,9 +95,20 @@ def parse_trial_balance(tb_path: str, config: CompanyConfiguration) -> Dict[str,
         # Halt-On-Unmapped Safeguard logic
         has_balance = any(abs(v) > Decimal('0.00') for v in [op_val, deb_val, cred_val, clos_val])
         if clean_name not in config.mappings:
-            if has_balance:
-                unmapped_tracker.append(str(raw_name).strip())
-            continue
+            if clean_name == 'opening stock':
+                # Auto-map Tally's built-in stock row to prevent it from ever flagging
+                from services.ledger_mapper import LedgerMapping
+                config.mappings[clean_name] = LedgerMapping(
+                    name=str(raw_name).strip(),
+                    vertical="Common",
+                    head="Stock-in-hand",
+                    group="BS",
+                    classification="Opening Stock"
+                )
+            else:
+                if has_balance:
+                    unmapped_tracker.append(str(raw_name).strip())
+                continue
             
         if not has_balance:
             continue

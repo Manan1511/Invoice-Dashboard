@@ -6,6 +6,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Bac
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Optional
+from decimal import Decimal
 import shutil
 
 from services.ledger_mapper import (
@@ -231,7 +232,8 @@ async def upload_files(
         "parsed_entries": parsed_entries,
         "config": config,
         "month": month,
-        "year": year
+        "year": year,
+        "closing_stock": Decimal(str(closing_stock))
     }
     
     PROGRESS_STATES[session_id] = {"status": "processing", "step": "PARSING_TB", "result": None, "error": None}
@@ -287,11 +289,12 @@ async def _process_and_finalize_workbook(session_id: str):
         config = session["config"]
         year = session["year"]
         month = session["month"]
+        closing_stock = session.get("closing_stock", Decimal('0.00'))
 
         PROGRESS_STATES[session_id]["step"] = "EXTRACTING_DASHBOARD"
         await asyncio.sleep(0.5)
 
-        pl_data = await asyncio.to_thread(run_pl_extraction, parsed_entries, config)
+        pl_data = await asyncio.to_thread(run_pl_extraction, parsed_entries, config, closing_stock)
 
         PROGRESS_STATES[session_id]["step"] = "GENERATING_EXCEL"
         await asyncio.sleep(0.5)
@@ -353,7 +356,7 @@ async def stream_status(session_id: str):
                 yield f"data: {json.dumps({'status': 'not_found'})}\n\n"
                 break
             state = PROGRESS_STATES[session_id]
-            yield f"data: {json.dumps(state)}\n\n"
+            yield f"data: {json.dumps(state, default=float)}\n\n"
             if state["status"] in ["completed", "error"]:
                 await asyncio.sleep(2)
                 break
