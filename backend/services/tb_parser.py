@@ -3,7 +3,7 @@ import unicodedata
 from typing import List, Dict, Optional, Tuple
 from decimal import Decimal, ROUND_HALF_UP
 from models.ledger import LedgerEntry
-from services.ledger_mapper import clean_ledger_name
+from services.ledger_mapper import strict_normalize_ledger_name
 
 CURRENCY_PRECISION = Decimal("0.01")
 
@@ -124,7 +124,7 @@ def _parse_sheet_rows(sheet, is_ytd: bool) -> Dict[str, LedgerEntry]:
             continue
         consecutive_empty = 0
             
-        clean_name = clean_ledger_name(raw_name)
+        clean_name = strict_normalize_ledger_name(raw_name)
         if not clean_name:
             continue
         

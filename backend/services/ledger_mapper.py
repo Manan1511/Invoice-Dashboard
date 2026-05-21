@@ -11,23 +11,13 @@ TEMPLATE_PATH = os.path.join(BASE_DIR, "templates", "MIS_template.xlsx")
 _REQUIRED_HEADER_KEYWORDS = {"ledger", "group", "head", "vertical"}
 
 
-def clean_ledger_name(name) -> str:
-    """
-    Standardizes ledger names to be immune to invisible whitespace,
-    non-breaking spaces, quotation marks, and case sensitivity.
-    """
+def strict_normalize_ledger_name(name) -> str:
     if not name:
         return ""
-    # 1. Convert to string and strip normal whitespace
-    s = str(name).strip()
-    # 2. Remove invisible non-breaking spaces and other control chars
+    # Strip outer CSV artifact quotes and non-breaking unicode layout spacing
+    s = str(name).strip().strip('"').strip("'")
     s = unicodedata.normalize("NFKD", s)
-    # 3. Remove surrounding quotes if present
-    s = s.strip('"').strip("'")
-    # 4. Strip again in case quotes had spaces
-    s = s.strip()
-    # 5. Normalize case for comparison
-    return s.lower()
+    return s.strip().lower()
 
 
 def _parse_ledger_sheet(ws) -> List[LedgerMapping]:
@@ -131,7 +121,7 @@ def load_mapped_ledgers(path: Optional[str] = None) -> Dict[str, LedgerMapping]:
     finally:
         wb.close()
 
-    return {clean_ledger_name(m.ledger_name): m for m in mappings_list}
+    return {strict_normalize_ledger_name(m.ledger_name): m for m in mappings_list}
 
 load_mapped_ledgers.cache_clear = lambda: None
 
@@ -182,7 +172,7 @@ def get_unmapped_ledgers(
     mapped = load_mapped_ledgers(path=ledger_path)
     unmapped = []
     for entry in parsed_entries:
-        name_clean = clean_ledger_name(entry.name)
+        name_clean = strict_normalize_ledger_name(entry.name)
         if not entry.name or entry.name.startswith(("Total", "Opening", "Closing")) or name_clean == "particulars":
             continue
         if name_clean not in mapped:

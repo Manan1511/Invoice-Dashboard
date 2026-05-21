@@ -2,7 +2,7 @@ import openpyxl
 from typing import List, Dict, Optional, Any
 from models.ledger import LedgerMapping, LedgerEntry, MappingError
 from models.pl_data import PLDataResponse, PLBreakdown, PLRow
-from services.ledger_mapper import load_mapped_ledgers, clean_ledger_name
+from services.ledger_mapper import load_mapped_ledgers, strict_normalize_ledger_name
 
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -43,7 +43,7 @@ def extract_pl_dashboard(
     for entry in parsed_entries:
         if not entry.name or entry.name.startswith(("Total", "Opening", "Closing")):
             continue
-        name_clean = clean_ledger_name(entry.name)
+        name_clean = strict_normalize_ledger_name(entry.name)
         if name_clean in {"particulars", "grand total", "total", "grand", "net profit", "net loss"}:
             continue
 
@@ -153,8 +153,8 @@ def extract_pl_dashboard(
     ytd_data['1. Sales Accounts'] = {col: Decimal('0.00') for col in all_cols}
 
     # Aggregate ledger entries
-    # Aggregate ledger entries using clean_ledger_name for standard matching
-    entries_map = {clean_ledger_name(e.name): e for e in parsed_entries}
+    # Aggregate ledger entries using strict_normalize_ledger_name for standard matching
+    entries_map = {strict_normalize_ledger_name(e.name): e for e in parsed_entries}
 
     for ledger_name_clean, mapping in mappings.items():
         entry = entries_map.get(ledger_name_clean)
@@ -166,12 +166,14 @@ def extract_pl_dashboard(
             v = 'Common'
 
         # Monthly net movement
-        op_val = _to_dec(entry.opening_net if entry.opening_net is not None else entry.opening)
-        cl_val = _to_dec(entry.closing_net if entry.closing_net is not None else entry.closing)
-        val_month = cl_val - op_val
+        op_val = _to_dec(entry.opening) if entry.opening is not None else Decimal('0.00')
+        cl_val = _to_dec(entry.closing) if entry.closing is not None else Decimal('0.00')
+
+        # TRUE MONTHLY MOVEMENT
+        val_month = cl_val - op_val 
 
         # YTD closing
-        val_ytd = _to_dec(entry.closing_ytd)
+        val_ytd = _to_dec(entry.closing_ytd) if entry.closing_ytd is not None else Decimal('0.00')
 
         # Apply sign corrections for revenue and income
         if mapping.head in {"1. Sales Accounts", "2. Indirect Income"}:
@@ -294,7 +296,7 @@ def extract_pl_dashboard(
         # 4. Proportional Cost Allocation Engine
         # Safely compute the revenue pool using floored individual vertical revenues
         revenue_verticals = [rc for rc in sorted_revenue_centers]
-        total_revenue_pool = sum(max(Decimal('0.00'), data['1. Sales Accounts'][rc]) for rc in revenue_verticals)
+        total_revenue_pool = sum(abs(data['1. Sales Accounts'][v]) for v in revenue_verticals)
 
         for cc in sorted_cost_centers:
             # Shared cost pool for cost center cc
@@ -304,14 +306,11 @@ def extract_pl_dashboard(
             for rc in sorted_revenue_centers:
                 # Allocation Pool Safety Gate: Fallback to even split if pool drops to or below Decimal('0.00')
                 if total_revenue_pool > Decimal('0.00'):
-                    sales_rc = data['1. Sales Accounts'][rc]
-                    # Floor individual vertical revenue at zero for ratio distribution
-                    # to prevent negative allocation scalars
-                    effective_sales = max(Decimal('0.00'), sales_rc)
-                    data[alloc_row_name][rc] = total_cc_expense * (effective_sales / total_revenue_pool)
+                    vertical_sales_magnitude = abs(data['1. Sales Accounts'][rc])
+                    data[alloc_row_name][rc] = total_cc_expense * (vertical_sales_magnitude / total_revenue_pool)
                 else:
                     # Fallback to even split if revenue is exactly zero or negative
-                    data[alloc_row_name][rc] = total_cc_expense * (Decimal('1.0') / (Decimal(str(len(revenue_verticals))) or Decimal('1.0')))
+                    data[alloc_row_name][rc] = total_cc_expense / Decimal(str(len(revenue_verticals)))
 
             # Clear cost center's own allocated column by negating the pool
             data[alloc_row_name][cc] = -total_cc_expense
@@ -347,7 +346,7 @@ def extract_pl_dashboard(
     creditor_map = {}
 
     for entry in parsed_entries:
-        name_clean = clean_ledger_name(entry.name)
+        name_clean = strict_normalize_ledger_name(entry.name)
         if name_clean in {"particulars", "grand total", "total", "grand", "net profit", "net loss"}:
             continue
 
