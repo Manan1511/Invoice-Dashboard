@@ -1,41 +1,43 @@
 import openpyxl
 import os
-import unicodedata
-from typing import List, Dict, Optional
-from models.ledger import LedgerMapping, LedgerEntry
+import json
+from dataclasses import dataclass, field, asdict
+from typing import List, Dict, Set, Optional
+from services.engine_utils import strict_normalize_ledger_name
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TEMPLATE_PATH = os.path.join(BASE_DIR, "templates", "MIS_template.xlsx")
+@dataclass
+class LedgerMapping:
+    name: str
+    vertical: str
+    head: str
+    group: str
+    classification: str = ""
 
-# Required column headers that must be present in a valid List of Ledgers sheet
-_REQUIRED_HEADER_KEYWORDS = {"ledger", "group", "head", "vertical"}
+@dataclass
+class CompanyConfiguration:
+    mappings: Dict[str, LedgerMapping] = field(default_factory=dict)
+    revenue_verticals: Set[str] = field(default_factory=set)
+    cost_verticals: Set[str] = field(default_factory=set)
 
 
-def strict_normalize_ledger_name(name) -> str:
-    if not name:
-        return ""
-    # Strip outer CSV artifact quotes and non-breaking unicode layout spacing
-    s = str(name).strip().strip('"').strip("'")
-    s = unicodedata.normalize("NFKD", s)
-    return s.strip().lower()
+class ValidationError(Exception):
+    pass
 
 
-def _parse_ledger_sheet(ws) -> List[LedgerMapping]:
+def parse_mappings_from_excel(uploaded_mapping_path: str) -> CompanyConfiguration:
     """
-    Parses a List of Ledgers worksheet and returns a list of LedgerMapping objects.
-    Scans for the header row dynamically (first row containing 'Ledger Name' or 'Ledger').
-    Raises ValueError if the sheet structure is invalid.
+    Parses mappings from an Excel file without loading them into the global store directly.
     """
-    header_row_idx: Optional[int] = None
-    col_map: Dict[str, int] = {}  # key -> 1-indexed column number
-
-    # Scan up to the first 10 rows for a header
-    for r_idx in range(1, min(ws.max_row + 1, 11)):
-        row_vals = [
-            str(ws.cell(row=r_idx, column=c).value or "").strip().lower()
-            for c in range(1, ws.max_column + 1)
-        ]
-        # Detect header row: must contain at least "ledger" (or "ledger name") and "group"
+    wb = openpyxl.load_workbook(uploaded_mapping_path, data_only=True)
+    sheet_name = next((s for s in wb.sheetnames if s.strip().lower() in ["list of ledgers", "ledger mapping", "mapping"]), None)
+    if not sheet_name:
+        sheet_name = wb.active.title
+    ws = wb[sheet_name]
+    
+    header_row_idx = None
+    col_map = {}
+    for r_idx in range(1, min(ws.max_row + 1, 15)):
+        row_vals = [str(ws.cell(row=r_idx, column=c).value or "").strip().lower() for c in range(1, ws.max_column + 1)]
         if any("ledger" in v for v in row_vals) and any("group" in v for v in row_vals):
             header_row_idx = r_idx
             for col_idx, header_text in enumerate(row_vals, start=1):
@@ -43,8 +45,6 @@ def _parse_ledger_sheet(ws) -> List[LedgerMapping]:
                     col_map["ledger_name"] = col_idx
                 elif header_text in {"ledger", "particulars", "account"} and "ledger_name" not in col_map:
                     col_map["ledger_name"] = col_idx
-                elif "under" == header_text:
-                    col_map["under"] = col_idx
                 elif "group" in header_text and "ledger_name" not in header_text:
                     col_map["group"] = col_idx
                 elif "head" in header_text and "classification" not in header_text:
@@ -54,231 +54,84 @@ def _parse_ledger_sheet(ws) -> List[LedgerMapping]:
                 elif "vertical" in header_text or "business" in header_text:
                     col_map["vertical"] = col_idx
             break
-
+            
     if header_row_idx is None:
-        raise ValueError(
-            "Could not locate a valid header row in the 'List of Ledgers' sheet. "
-            "The sheet must contain a header row with columns for Ledger Name, Group, Head, and Vertical."
-        )
-
-    # Validate required columns are mapped
-    for required_key in ("ledger_name", "group", "head", "vertical"):
-        if required_key not in col_map:
-            raise ValueError(
-                f"Required column '{required_key.replace('_', ' ').title()}' not found in the List of Ledgers sheet. "
-                f"Found columns: {[str(ws.cell(row=header_row_idx, column=c).value) for c in range(1, ws.max_column + 1)]}"
-            )
-
-    mappings: List[LedgerMapping] = []
+        raise ValidationError("Could not locate a valid header row containing Ledger Name and Group.")
+    if "ledger_name" not in col_map:
+        raise ValidationError("Required column 'Ledger Name' not found.")
+        
+    config = CompanyConfiguration()
     for r_idx in range(header_row_idx + 1, ws.max_row + 1):
-        name_val = ws.cell(row=r_idx, column=col_map["ledger_name"]).value
-        if not name_val or str(name_val).strip() == "":
+        raw_name = ws.cell(row=r_idx, column=col_map["ledger_name"]).value
+        if not raw_name or str(raw_name).strip() == "":
             continue
-
-        name = str(name_val).strip()
-        under_val = ws.cell(row=r_idx, column=col_map["under"]).value if "under" in col_map else None
-        group_val = ws.cell(row=r_idx, column=col_map["group"]).value
-        head_val = ws.cell(row=r_idx, column=col_map["head"]).value
-        classification_val = ws.cell(row=r_idx, column=col_map["classification"]).value if "classification" in col_map else None
-        vertical_val = ws.cell(row=r_idx, column=col_map["vertical"]).value
-
-        mappings.append(LedgerMapping(
-            ledger_name=name,
-            under=str(under_val).strip() if under_val else None,
-            group=str(group_val).strip() if group_val else "BS",
-            head=str(head_val).strip() if head_val else "",
-            classification=str(classification_val).strip() if classification_val else None,
-            vertical=str(vertical_val).strip() if vertical_val else "Common"
-        ))
-
-    return mappings
-
-
-
-def load_mapped_ledgers(path: Optional[str] = None) -> Dict[str, LedgerMapping]:
-    """
-    Loads existing ledger mappings from the List of Ledgers sheet.
-    If `path` is provided, reads from that file; otherwise falls back to the master template.
-    Returns a dict keyed by cleaned, standardized ledger name for fast lookups.
-    """
-    source_path = path if path else TEMPLATE_PATH
-    wb = openpyxl.load_workbook(source_path, data_only=True)
-
-    # Find the sheet — template may have trailing space in name
-    sheet_name = next(
-        (s for s in wb.sheetnames if s.strip().lower() == "list of ledgers"),
-        None
-    )
-    if sheet_name is None:
-        raise ValueError(
-            f"Sheet 'List of Ledgers' not found in '{os.path.basename(source_path)}'. "
-            f"Available sheets: {wb.sheetnames}"
-        )
-
-    ws = wb[sheet_name]
-    try:
-        mappings_list = _parse_ledger_sheet(ws)
-    finally:
-        wb.close()
-
-    return {strict_normalize_ledger_name(m.ledger_name): m for m in mappings_list}
-
-load_mapped_ledgers.cache_clear = lambda: None
-
-
-
-def parse_ledger_file(file_path: str) -> List[LedgerMapping]:
-    """
-    Parses an uploaded List of Ledgers Excel file and returns structured LedgerMapping objects.
-    Raises ValueError with clear messages if the file format is invalid.
-    """
-    wb = openpyxl.load_workbook(file_path, data_only=True)
-
-    sheet_name = next(
-        (s for s in wb.sheetnames if s.strip().lower() == "list of ledgers"),
-        None
-    )
-    if sheet_name is None:
-        available = ", ".join(wb.sheetnames) or "(none)"
-        raise ValueError(
-            f"The uploaded file does not contain a 'List of Ledgers' sheet. "
-            f"Found sheets: {available}. "
-            "Please upload the correct MIS workbook that contains this sheet."
-        )
-
-    ws = wb[sheet_name]
-    try:
-        mappings = _parse_ledger_sheet(ws)
-    finally:
-        wb.close()
-
-    if not mappings:
-        raise ValueError(
-            "The 'List of Ledgers' sheet was found but contains no ledger rows. "
-            "Please check the file and ensure ledger data is present below the header row."
-        )
-
-    return mappings
-
-
-def get_unmapped_ledgers(
-    parsed_entries: List[LedgerEntry],
-    ledger_path: Optional[str] = None
-) -> List[str]:
-    """
-    Compares parsed trial balance entries with master mappings and returns unmapped ledger names.
-    Optionally loads mappings from `ledger_path` instead of the template.
-    """
-    mapped = load_mapped_ledgers(path=ledger_path)
-    unmapped = []
-    for entry in parsed_entries:
-        name_clean = strict_normalize_ledger_name(entry.name)
-        if not entry.name or entry.name.startswith(("Total", "Opening", "Closing")) or name_clean == "particulars":
+        clean_name = strict_normalize_ledger_name(raw_name)
+        if not clean_name:
             continue
-        if name_clean not in mapped:
-            unmapped.append(entry.name)
-    return unmapped
+            
+        raw_vertical = ws.cell(row=r_idx, column=col_map.get("vertical", -1)).value if "vertical" in col_map else None
+        raw_head = ws.cell(row=r_idx, column=col_map.get("head", -1)).value if "head" in col_map else None
+        raw_group = ws.cell(row=r_idx, column=col_map.get("group", -1)).value if "group" in col_map else None
+        raw_classification = ws.cell(row=r_idx, column=col_map.get("classification", -1)).value if "classification" in col_map else None
+        
+        vertical_clean = str(raw_vertical).strip().title() if raw_vertical else "Common"
+        head_clean = str(raw_head).strip() if raw_head else ""
+        group_clean = str(raw_group).strip() if raw_group else ""
+        classification_clean = str(raw_classification).strip() if raw_classification else ""
+        
+        config.mappings[clean_name] = LedgerMapping(
+            name=str(raw_name).strip(),
+            vertical=vertical_clean,
+            head=head_clean,
+            group=group_clean,
+            classification=classification_clean
+        )
+    wb.close()
+    return config
 
+def load_dynamic_company_mapping(json_path: str) -> CompanyConfiguration:
+    if not os.path.exists(json_path):
+        return CompanyConfiguration() # Return empty if no mapping exists yet
+    
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    config = CompanyConfiguration()
+    has_sales_flags = set()
+    has_expenses_flags = set()
+    
+    for item in data:
+        clean_name = strict_normalize_ledger_name(item["name"])
+        vertical = str(item.get("vertical", "Common")).strip().title()
+        head = str(item.get("head", "")).strip()
+        
+        config.mappings[clean_name] = LedgerMapping(
+            name=str(item["name"]).strip(),
+            vertical=vertical,
+            head=head,
+            group=str(item.get("group", "")).strip(),
+            classification=str(item.get("classification", "")).strip()
+        )
+        
+        if "1. Sales Accounts" in head:
+            has_sales_flags.add(vertical)
+        if any(marker in head for marker in ["Expense", "Cost", "COGS"]):
+            has_expenses_flags.add(vertical)
+            
+    for vert in set(list(has_sales_flags) + list(has_expenses_flags)):
+        if vert in has_sales_flags:
+            config.revenue_verticals.add(vert)
+        else:
+            config.cost_verticals.add(vert)
+            
+    return config
 
-def replace_ledger_list_in_template(new_mappings: List[LedgerMapping]) -> None:
-    """
-    Completely replaces the 'List of Ledgers' sheet data in the master template
-    with the provided new_mappings. Preserves all formula columns (cols 9+) for
-    existing rows and writes new rows with VLOOKUP formulas. Non-data rows (header
-    and summary rows in cols 1-8) are cleared and rewritten cleanly.
-    """
-    wb = openpyxl.load_workbook(TEMPLATE_PATH, data_only=False)
-
-    sheet_name = next(
-        (s for s in wb.sheetnames if s.strip().lower() == "list of ledgers"),
-        None
-    )
-    if sheet_name is None:
-        raise ValueError(f"'List of Ledgers' sheet not found in template. Available: {wb.sheetnames}")
-
-    ws = wb[sheet_name]
-
-    # Determine the data start row (first row after headers)
-    DATA_START_ROW = 5  # rows 1-4 are title/header rows in the template
-
-    # Clear existing data rows (columns 1-17 completely) down to ws.max_row
-    max_row = max(ws.max_row, DATA_START_ROW)
-    for r_idx in range(DATA_START_ROW, max_row + 1):
-        for c_idx in range(1, 18):  # Columns 1 through 17 (A to Q)
-            ws.cell(row=r_idx, column=c_idx).value = None
-
-    # Write new mappings
-    for idx, mapping in enumerate(new_mappings):
-        row = DATA_START_ROW + idx
-
-        ws.cell(row=row, column=1, value=idx + 1)              # Sl. No.
-        ws.cell(row=row, column=2, value=mapping.ledger_name)
-        ws.cell(row=row, column=3, value=mapping.under)
-        ws.cell(row=row, column=4, value=mapping.group)
-        ws.cell(row=row, column=5, value=mapping.head)
-        ws.cell(row=row, column=6, value=mapping.classification)
-        ws.cell(row=row, column=7, value=mapping.vertical)
-
-        # Write VLOOKUP formulas for monthly TB columns (cols 9-12)
-        ws.cell(row=row, column=9,  value=f"=IFERROR(VLOOKUP(B{row},'TB '!$A:$G,7,),0)")
-        ws.cell(row=row, column=10, value=f"=IFERROR(VLOOKUP($B{row},'TB '!$4:$1048576,MATCH('List of Ledgers '!J$4,'TB '!$4:$4,0),0),0)")
-        ws.cell(row=row, column=11, value=f"=IFERROR(VLOOKUP($B{row},'TB '!$4:$1048576,MATCH('List of Ledgers '!K$4,'TB '!$4:$4,0),0),0)")
-        ws.cell(row=row, column=12, value=f"=IFERROR(VLOOKUP(B{row},'TB '!$A:$J,10,),0)")
-
-        # Write VLOOKUP formulas for YTD TB columns (cols 14-17)
-        ws.cell(row=row, column=14, value=f"=IFERROR(VLOOKUP($B{row},'TB YTD'!$4:$1048576,MATCH('List of Ledgers '!N$4,'TB YTD'!$4:$4,0),0),0)")
-        ws.cell(row=row, column=15, value=f"=IFERROR(VLOOKUP($B{row},'TB YTD'!$4:$1048576,MATCH('List of Ledgers '!O$4,'TB YTD'!$4:$4,0),0),0)")
-        ws.cell(row=row, column=16, value=f"=IFERROR(VLOOKUP($B{row},'TB YTD'!$4:$1048576,MATCH('List of Ledgers '!P$4,'TB YTD'!$4:$4,0),0),0)")
-        ws.cell(row=row, column=17, value=f"=IFERROR(VLOOKUP($B{row},'TB YTD'!$4:$1048576,MATCH('List of Ledgers '!Q$4,'TB YTD'!$4:$4,0),0),0)")
-
-    wb.save(TEMPLATE_PATH)
-    load_mapped_ledgers.cache_clear()
-
-
-
-def append_new_mappings_to_template(new_mappings: List[LedgerMapping]) -> None:
-    """
-    Appends new ledger mappings to the template List of Ledgers sheet with formulas.
-    Used when the user classifies previously unmapped ledgers.
-    """
-    wb = openpyxl.load_workbook(TEMPLATE_PATH, data_only=False)
-
-    sheet_name = next(
-        (s for s in wb.sheetnames if s.strip().lower() == "list of ledgers"),
-        None
-    )
-    if sheet_name is None:
-        raise ValueError(f"'List of Ledgers' sheet not found in template.")
-
-    ws = wb[sheet_name]
-
-    # Find true insertion point (last non-empty row in col 2)
-    start_row = ws.max_row + 1
-    for r_idx in range(ws.max_row, 4, -1):
-        val = ws.cell(row=r_idx, column=2).value
-        if val and str(val).strip() != "":
-            start_row = r_idx + 1
-            break
-
-    for idx, mapping in enumerate(new_mappings):
-        row = start_row + idx
-
-        ws.cell(row=row, column=1, value=row - 4)          # Sl. No.
-        ws.cell(row=row, column=2, value=mapping.ledger_name)
-        ws.cell(row=row, column=3, value=mapping.under)
-        ws.cell(row=row, column=4, value=mapping.group)
-        ws.cell(row=row, column=5, value=mapping.head)
-        ws.cell(row=row, column=6, value=mapping.classification)
-        ws.cell(row=row, column=7, value=mapping.vertical)
-
-        ws.cell(row=row, column=9,  value=f"=IFERROR(VLOOKUP(B{row},'TB '!$A:$G,7,),0)")
-        ws.cell(row=row, column=10, value=f"=IFERROR(VLOOKUP($B{row},'TB '!$4:$1048576,MATCH('List of Ledgers '!J$4,'TB '!$4:$4,0),0),0)")
-        ws.cell(row=row, column=11, value=f"=IFERROR(VLOOKUP($B{row},'TB '!$4:$1048576,MATCH('List of Ledgers '!K$4,'TB '!$4:$4,0),0),0)")
-        ws.cell(row=row, column=12, value=f"=IFERROR(VLOOKUP(B{row},'TB '!$A:$J,10,),0)")
-        ws.cell(row=row, column=14, value=f"=IFERROR(VLOOKUP($B{row},'TB YTD'!$4:$1048576,MATCH('List of Ledgers '!N$4,'TB YTD'!$4:$4,0),0),0)")
-        ws.cell(row=row, column=15, value=f"=IFERROR(VLOOKUP($B{row},'TB YTD'!$4:$1048576,MATCH('List of Ledgers '!O$4,'TB YTD'!$4:$4,0),0),0)")
-        ws.cell(row=row, column=16, value=f"=IFERROR(VLOOKUP($B{row},'TB YTD'!$4:$1048576,MATCH('List of Ledgers '!P$4,'TB YTD'!$4:$4,0),0),0)")
-        ws.cell(row=row, column=17, value=f"=IFERROR(VLOOKUP($B{row},'TB YTD'!$4:$1048576,MATCH('List of Ledgers '!Q$4,'TB YTD'!$4:$4,0),0),0)")
-
-    wb.save(TEMPLATE_PATH)
-    load_mapped_ledgers.cache_clear()
+def save_dynamic_company_mapping(json_path: str, new_mappings: List[LedgerMapping]):
+    config = load_dynamic_company_mapping(json_path)
+    for m in new_mappings:
+        clean_name = strict_normalize_ledger_name(m.name)
+        config.mappings[clean_name] = m
+        
+    data = [asdict(m) for m in config.mappings.values()]
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
